@@ -1,0 +1,1445 @@
+#!/usr/bin/env -S uv run --script --with mlx-whisper --with click --with resemble-enhance --prerelease=allow --python 3.11 --quiet
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#   "mlx-whisper>=0.4",
+#   "click>=8.0",
+#   "resemble-enhance>=0.0.2.dev",
+# ]
+# ///
+"""declip — Filler word removal + Studio Sound enhancement + Voice EQ.
+
+Built for M4 Pro Metal 4. Replaces Descript.
+Dry-run by default. Pass --execute to process.
+"""
+
+import difflib
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import NamedTuple
+
+import threading
+import click
+
+VERSION = "0.2.0"
+
+
+# ── CLI UI ─────────────────────────────────────────────────
+
+SPINNER_FRAMES = "◐◓◑◒"
+MARK = "◎"
+DONE = "●"
+DIM = "\033[2m"
+BOLD = "\033[1m"
+GREEN = "\033[32m"
+CYAN = "\033[36m"
+YELLOW = "\033[33m"
+RED = "\033[31m"
+RESET = "\033[0m"
+CLEAR_LINE = "\033[2K\r"
+
+
+IS_TTY = sys.stdout.isatty()
+
+
+class Spinner:
+    """Half-moon rotation spinner — ◐◓◑◒.
+    TTY: animated in-place.  Non-TTY: static ◐ line on enter."""
+
+    def __init__(self, message: str):
+        self.message = message
+        self._stop = threading.Event()
+        self._thread = None
+        self._frame = 0
+
+    def __enter__(self):
+        if IS_TTY:
+            self._thread = threading.Thread(target=self._spin, daemon=True)
+            self._thread.start()
+        else:
+            click.echo(f"  {CYAN}◐{RESET} {self.message}")
+        return self
+
+    def __exit__(self, *args):
+        self._stop.set()
+        if self._thread:
+            self._thread.join()
+            sys.stdout.write(f"\r{CLEAR_LINE}")
+            sys.stdout.flush()
+
+    def _spin(self):
+        while not self._stop.is_set():
+            frame = SPINNER_FRAMES[self._frame % len(SPINNER_FRAMES)]
+            sys.stdout.write(f"\r{CLEAR_LINE}  {CYAN}{frame}{RESET} {self.message}")
+            sys.stdout.flush()
+            self._frame += 1
+            self._stop.wait(0.1)
+
+    def update(self, message: str):
+        self.message = message
+
+
+def progress_tick(i: int, n: int, label: str, milestones: set | None = None):
+    """Emit milestone progress lines in non-TTY mode.
+    TTY mode: overwrite single line. Non-TTY: print at 25/50/75/100%."""
+    if IS_TTY:
+        sys.stdout.write(f"\r{CLEAR_LINE}  {CYAN}◐{RESET} {label} {i + 1}/{n}")
+        sys.stdout.flush()
+        return
+    # Non-TTY: emit at milestone percentages
+    if milestones is None:
+        return
+    pct = int((i + 1) / n * 100) if n > 0 else 100
+    if pct in milestones:
+        milestones.discard(pct)
+        click.echo(f"    {DIM}{pct}% — {label} {i + 1}/{n}{RESET}")
+
+
+def ui_banner():
+    """Print branded startup mark."""
+    click.echo(f"\n  {CYAN}{MARK}{RESET} {BOLD}declip{RESET} {DIM}v{VERSION}{RESET}")
+
+
+def ui_file_info(path: Path, info: dict, duration: float):
+    """Print file info under the banner."""
+    vstream = next((s for s in info.get("streams", []) if s.get("codec_type") == "video" and s.get("codec_name") != "mjpeg"), None)
+    astream = next((s for s in info.get("streams", []) if s.get("codec_type") == "audio"), None)
+
+    parts = [f"{duration / 60:.1f} min"]
+    if vstream:
+        parts.append(f"{vstream.get('codec_name')} {vstream.get('width')}×{vstream.get('height')}")
+    if astream:
+        parts.append(f"{astream.get('codec_name')} {int(astream.get('sample_rate', 0)) // 1000}kHz")
+
+    click.echo(f"\n  {CYAN}{MARK}{RESET} {BOLD}{path.name}{RESET}")
+    click.echo(f"    {DIM}{' · '.join(parts)}{RESET}")
+    click.echo()
+
+
+def ui_done(message: str, detail: str = ""):
+    """Print completed step with filled circle."""
+    d = f" {DIM}({detail}){RESET}" if detail else ""
+    click.echo(f"  {GREEN}{DONE}{RESET} {message}{d}")
+
+
+def ui_warn(message: str):
+    """Print warning."""
+    click.echo(f"  {YELLOW}○{RESET} {message}")
+
+
+def ui_error(message: str):
+    """Print error."""
+    click.echo(f"  {RED}○{RESET} {message}")
+
+
+def ui_result(path: Path, old_duration: float, new_duration: float, n_fillers: float, time_removed: float, preset: str, enhanced: bool):
+    """Print final result — bookend with ◎."""
+    click.echo()
+    click.echo(f"  {CYAN}{MARK}{RESET} {BOLD}{path.name}{RESET}")
+    click.echo(f"    {old_duration / 60:.1f} min → {new_duration / 60:.1f} min {DIM}({n_fillers} fillers, {time_removed:.1f}s removed){RESET}")
+    click.echo(f"    {DIM}Preset: {preset} · Enhanced: {'yes' if enhanced else 'no'}{RESET}")
+    click.echo()
+CACHE_DIR = Path.home() / ".cache" / "declip"
+CONFIG_DIR = Path.home() / ".config" / "declip"
+TRANSCRIPT_CACHE = CACHE_DIR / "transcripts"
+ENHANCE_CACHE = CACHE_DIR / "enhanced"
+AUDIT_LOG = CACHE_DIR / "audit.jsonl"
+PRESETS_FILE = CONFIG_DIR / "presets.json"
+FILLERS_FILE = CONFIG_DIR / "fillers.txt"
+
+DEFAULT_FILLERS = {
+    "um", "uh", "uhh", "umm", "ummm", "hmm", "hm",
+    "like", "you know", "i mean", "sort of", "kind of",
+    "basically", "actually", "literally", "right", "so", "well",
+}
+
+# Context-sensitive fillers: only flagged under specific conditions
+CONTEXT_FILLERS = {"like", "so", "well", "right", "actually"}
+
+DEFAULT_PRESET_CHAIN = (
+    "highpass=f=60:poles=2,"
+    "agate=threshold=0.05:attack=25:release=200:ratio=3:knee=6,"
+    "bass=gain=5:frequency=110:width_type=s:width=0.7,"
+    "equalizer=f=180:width_type=o:width=0.5:g=3,"
+    "equalizer=f=3000:width_type=o:width=1.0:g=-2,"
+    "acompressor=threshold=0.15:ratio=4:attack=5:release=50:makeup=2:knee=2,"
+    "loudnorm=I=-16:TP=-1.5:LRA=11"
+)
+
+
+class CutRegion(NamedTuple):
+    start: float
+    end: float
+    word: str
+    confidence: float
+
+
+class KeepRegion(NamedTuple):
+    start: float
+    end: float
+
+
+# ── Media Probing ──────────────────────────────────────────
+
+
+def probe_media(path: Path) -> dict:
+    """Get media info via ffprobe."""
+    cmd = [
+        "ffprobe", "-v", "quiet", "-print_format", "json",
+        "-show_format", "-show_streams", str(path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise click.ClickException(f"ffprobe failed: {result.stderr.strip()}")
+    return json.loads(result.stdout)
+
+
+def get_duration(info: dict) -> float:
+    """Extract duration from probe info."""
+    if "format" in info and "duration" in info["format"]:
+        return float(info["format"]["duration"])
+    for stream in info.get("streams", []):
+        if "duration" in stream:
+            return float(stream["duration"])
+    raise click.ClickException("Cannot determine media duration")
+
+
+def has_video(info: dict) -> bool:
+    """Check if media has a video stream."""
+    return any(s.get("codec_type") == "video" for s in info.get("streams", []))
+
+
+def has_audio(info: dict) -> bool:
+    """Check if media has an audio stream."""
+    return any(s.get("codec_type") == "audio" for s in info.get("streams", []))
+
+
+def get_audio_sample_rate(info: dict) -> int:
+    """Get audio sample rate."""
+    for s in info.get("streams", []):
+        if s.get("codec_type") == "audio":
+            return int(s.get("sample_rate", 48000))
+    return 48000
+
+
+# ── Audio Extraction ───────────────────────────────────────
+
+
+def extract_audio(input_path: Path, tmp_dir: Path) -> Path:
+    """Extract audio to WAV for Whisper/Resemble processing."""
+    wav_path = tmp_dir / "audio.wav"
+    cmd = [
+        "ffmpeg", "-y", "-i", str(input_path),
+        "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
+        str(wav_path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise click.ClickException(f"Audio extraction failed: {result.stderr.strip()}")
+    return wav_path
+
+
+def extract_audio_fullrate(input_path: Path, tmp_dir: Path) -> Path:
+    """Extract audio at original sample rate for Resemble Enhance."""
+    wav_path = tmp_dir / "audio_full.wav"
+    cmd = [
+        "ffmpeg", "-y", "-i", str(input_path),
+        "-vn", "-acodec", "pcm_s16le", "-ac", "1",
+        str(wav_path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise click.ClickException(f"Audio extraction failed: {result.stderr.strip()}")
+    return wav_path
+
+
+# ── File Hashing (for caching) ─────────────────────────────
+
+
+def file_hash(path: Path) -> str:
+    """Quick hash for cache keying. Uses first/last 64KB + file size."""
+    h = hashlib.sha256()
+    size = path.stat().st_size
+    h.update(str(size).encode())
+    with open(path, "rb") as f:
+        h.update(f.read(65536))
+        if size > 65536:
+            f.seek(-65536, 2)
+            h.update(f.read(65536))
+    return h.hexdigest()[:16]
+
+
+# ── Transcription ──────────────────────────────────────────
+
+
+def transcribe(audio_path: Path, model_name: str, use_cache: bool = True) -> dict:
+    """Transcribe audio using mlx-whisper with Metal acceleration."""
+    cache_key = file_hash(audio_path)
+    cache_file = TRANSCRIPT_CACHE / f"{cache_key}.json"
+
+    if use_cache and cache_file.exists():
+        click.echo(f"  Using cached transcript: {cache_file.name}")
+        return json.loads(cache_file.read_text())
+
+    click.echo(f"  Transcribing with {model_name} (Metal GPU)...")
+    t0 = time.time()
+
+    import mlx_whisper
+    result = mlx_whisper.transcribe(
+        str(audio_path),
+        path_or_hf_repo=model_name,
+        word_timestamps=True,
+        language="en",
+    )
+
+    elapsed = time.time() - t0
+    click.echo(f"  Transcribed in {elapsed:.1f}s")
+
+    # Cache the result
+    TRANSCRIPT_CACHE.mkdir(parents=True, exist_ok=True)
+    cache_file.write_text(json.dumps(result, default=str))
+
+    return result
+
+
+# ── Filler Detection ───────────────────────────────────────
+
+
+def load_fillers() -> set[str]:
+    """Load filler word list from config or defaults."""
+    if FILLERS_FILE.exists():
+        words = set()
+        for line in FILLERS_FILE.read_text().splitlines():
+            line = line.strip().lower()
+            if line and not line.startswith("#"):
+                words.add(line)
+        return words if words else DEFAULT_FILLERS
+    return DEFAULT_FILLERS
+
+
+def is_sentence_start(words: list[dict], idx: int) -> bool:
+    """Check if word at idx appears to be at a sentence/clause start."""
+    if idx == 0:
+        return True
+    prev = words[idx - 1]
+    curr = words[idx]
+    # Gap > 300ms suggests sentence boundary
+    gap = curr.get("start", 0) - prev.get("end", 0)
+    if gap > 0.3:
+        return True
+    # Previous word ends with sentence-ending punctuation
+    prev_word = prev.get("word", "").strip()
+    if prev_word and prev_word[-1] in ".!?":
+        return True
+    return False
+
+
+def has_following_pause(words: list[dict], idx: int, threshold: float = 0.2) -> bool:
+    """Check if there's a pause after the word at idx."""
+    if idx >= len(words) - 1:
+        return True
+    curr = words[idx]
+    nxt = words[idx + 1]
+    gap = nxt.get("start", 0) - curr.get("end", 0)
+    return gap > threshold
+
+
+def detect_fillers(
+    transcript: dict,
+    fillers: set[str],
+    min_confidence: float = 0.5,
+    margin_ms: float = 80,
+) -> list[CutRegion]:
+    """Detect filler words with context-aware false positive reduction."""
+    cuts = []
+
+    for segment in transcript.get("segments", []):
+        words = segment.get("words", [])
+        skip_next = False
+
+        for i, w in enumerate(words):
+            if skip_next:
+                skip_next = False
+                continue
+
+            word_text = w.get("word", "").strip().lower()
+            word_text = re.sub(r"[^\w\s']", "", word_text)
+            confidence = w.get("probability", w.get("confidence", 1.0))
+            start = w.get("start", 0)
+            end = w.get("end", 0)
+
+            if not word_text or end <= start:
+                continue
+
+            # Check two-word fillers first
+            if i < len(words) - 1:
+                next_word = words[i + 1].get("word", "").strip().lower()
+                next_word = re.sub(r"[^\w\s']", "", next_word)
+                two_word = f"{word_text} {next_word}"
+                if two_word in fillers:
+                    cuts.append(CutRegion(
+                        start=start,
+                        end=words[i + 1].get("end", end),
+                        word=two_word,
+                        confidence=min(confidence, words[i + 1].get("probability", 1.0)),
+                    ))
+                    skip_next = True
+                    continue
+
+            # Single-word filler check
+            if word_text not in fillers:
+                continue
+
+            # Context rules for ambiguous fillers
+            if word_text in CONTEXT_FILLERS:
+                if word_text == "like" and confidence >= min_confidence:
+                    continue  # Probably semantic "I like this"
+                if word_text in ("so", "well") and not is_sentence_start(words, i):
+                    continue  # Mid-sentence "so" is usually meaningful
+                if word_text == "right" and not has_following_pause(words, i):
+                    continue  # "right now", "right there" — not filler
+                if word_text == "actually" and not has_following_pause(words, i):
+                    continue  # "actually works" — not filler
+
+            cuts.append(CutRegion(
+                start=start, end=end,
+                word=word_text, confidence=confidence,
+            ))
+
+    return merge_cuts(cuts, margin_ms)
+
+
+def merge_cuts(cuts: list[CutRegion], margin_ms: float) -> list[CutRegion]:
+    """Merge adjacent/overlapping cut regions and apply margin."""
+    if not cuts:
+        return []
+
+    margin = margin_ms / 1000.0
+    # Sort by start time
+    cuts = sorted(cuts, key=lambda c: c.start)
+
+    merged = []
+    current = CutRegion(
+        start=max(0, cuts[0].start - margin),
+        end=cuts[0].end + margin,
+        word=cuts[0].word,
+        confidence=cuts[0].confidence,
+    )
+
+    for cut in cuts[1:]:
+        expanded_start = max(0, cut.start - margin)
+        expanded_end = cut.end + margin
+
+        if expanded_start <= current.end:
+            # Overlapping — merge
+            current = CutRegion(
+                start=current.start,
+                end=max(current.end, expanded_end),
+                word=f"{current.word}, {cut.word}",
+                confidence=min(current.confidence, cut.confidence),
+            )
+        else:
+            merged.append(current)
+            current = CutRegion(
+                start=expanded_start, end=expanded_end,
+                word=cut.word, confidence=cut.confidence,
+            )
+
+    merged.append(current)
+
+    # Second pass: collapse clusters where speech between cuts is < 200ms
+    # These create machine-gun jump cuts from tiny fragments (breaths, mouth sounds)
+    if len(merged) < 2:
+        return merged
+    collapsed = [merged[0]]
+    for cut in merged[1:]:
+        gap = cut.start - collapsed[-1].end
+        if gap < 0.2:
+            # Absorb the tiny speech fragment — merge into one continuous cut
+            collapsed[-1] = CutRegion(
+                start=collapsed[-1].start,
+                end=max(collapsed[-1].end, cut.end),
+                word=f"{collapsed[-1].word}, {cut.word}",
+                confidence=min(collapsed[-1].confidence, cut.confidence),
+            )
+        else:
+            collapsed.append(cut)
+    return collapsed
+
+
+def detect_gaps(transcript: dict, max_gap_ms: float = 300) -> list[CutRegion]:
+    """Find word gaps exceeding max_gap_ms and create cuts to compress them."""
+    if max_gap_ms <= 0:
+        return []
+
+    max_gap = max_gap_ms / 1000.0
+    cuts = []
+
+    for segment in transcript.get("segments", []):
+        words = segment.get("words", [])
+        for i in range(len(words) - 1):
+            curr_end = words[i].get("end", 0)
+            next_start = words[i + 1].get("start", 0)
+            gap = next_start - curr_end
+
+            if gap > max_gap:
+                # Cut the excess, keeping max_gap worth of silence
+                trim = gap - max_gap
+                # Cut from the middle of the gap
+                cut_start = curr_end + (max_gap / 2)
+                cut_end = cut_start + trim
+                cuts.append(CutRegion(
+                    start=cut_start,
+                    end=cut_end,
+                    word=f"gap ({gap:.2f}s→{max_gap:.2f}s)",
+                    confidence=1.0,
+                ))
+
+    # Also check gaps between segments
+    segments = transcript.get("segments", [])
+    for i in range(len(segments) - 1):
+        curr_end = segments[i].get("end", 0)
+        next_start = segments[i + 1].get("start", 0)
+        gap = next_start - curr_end
+
+        if gap > max_gap:
+            trim = gap - max_gap
+            cut_start = curr_end + (max_gap / 2)
+            cut_end = cut_start + trim
+            cuts.append(CutRegion(
+                start=cut_start,
+                end=cut_end,
+                word=f"gap ({gap:.2f}s→{max_gap:.2f}s)",
+                confidence=1.0,
+            ))
+
+    return sorted(cuts, key=lambda c: c.start)
+
+
+def detect_retakes(transcript: dict, similarity_threshold: float = 0.6, window_s: float = 15.0) -> list[CutRegion]:
+    """Detect repeated lines (retakes) and mark earlier instances for cutting.
+
+    Compares sentence-level chunks within a sliding time window. When two chunks
+    are similar enough, the earlier one is a failed take — cut it, keep the later one.
+    """
+    # Build sentence-level chunks from word timestamps
+    chunks = []
+    current_words = []
+    current_start = None
+
+    for segment in transcript.get("segments", []):
+        for word in segment.get("words", []):
+            w_text = word.get("word", "").strip()
+            w_start = word.get("start", 0)
+            w_end = word.get("end", 0)
+            if not w_text:
+                continue
+
+            if current_start is None:
+                current_start = w_start
+            current_words.append(w_text)
+
+            # Split on sentence boundaries or long pauses (> 1s)
+            is_sentence_end = w_text.rstrip().endswith((".", "!", "?"))
+            next_words = segment.get("words", [])
+            word_idx = next_words.index(word) if word in next_words else -1
+            has_long_pause = False
+            if word_idx >= 0 and word_idx + 1 < len(next_words):
+                gap = next_words[word_idx + 1].get("start", 0) - w_end
+                has_long_pause = gap > 1.0
+
+            if is_sentence_end or has_long_pause or len(current_words) >= 15:
+                text = " ".join(current_words).lower().strip()
+                text = re.sub(r"[^\w\s]", "", text)
+                if len(current_words) >= 3:  # Skip tiny fragments
+                    chunks.append({
+                        "text": text,
+                        "start": current_start,
+                        "end": w_end,
+                        "word_count": len(current_words),
+                    })
+                current_words = []
+                current_start = None
+
+    # Flush remaining words
+    if current_words and current_start is not None and len(current_words) >= 3:
+        text = " ".join(current_words).lower().strip()
+        text = re.sub(r"[^\w\s]", "", text)
+        last_seg = transcript.get("segments", [])[-1]
+        last_word = last_seg.get("words", [])[-1] if last_seg.get("words") else {}
+        chunks.append({
+            "text": text,
+            "start": current_start,
+            "end": last_word.get("end", current_start),
+            "word_count": len(current_words),
+        })
+
+    # Compare chunks within the time window
+    cuts = []
+    used = set()  # Track chunks already marked as retakes
+
+    for i in range(len(chunks)):
+        if i in used:
+            continue
+        for j in range(i + 1, len(chunks)):
+            if j in used:
+                continue
+            # Only compare within time window
+            if chunks[j]["start"] - chunks[i]["end"] > window_s:
+                break
+
+            ratio = difflib.SequenceMatcher(
+                None, chunks[i]["text"].split(), chunks[j]["text"].split()
+            ).ratio()
+
+            if ratio >= similarity_threshold:
+                # Cut the earlier take, keep the later one
+                cuts.append(CutRegion(
+                    start=chunks[i]["start"],
+                    end=chunks[i]["end"],
+                    word=f"retake ({ratio:.0%} match)",
+                    confidence=ratio,
+                ))
+                used.add(i)
+                break  # This chunk is consumed, move on
+
+    return cuts
+
+
+def invert_cuts(cuts: list[CutRegion], duration: float, min_segment_ms: float = 100) -> list[KeepRegion]:
+    """Convert cut regions to keep regions. Drop segments shorter than min_segment_ms."""
+    keeps = []
+    pos = 0.0
+    min_seg = min_segment_ms / 1000.0
+
+    for cut in sorted(cuts, key=lambda c: c.start):
+        if cut.start > pos:
+            seg_dur = cut.start - pos
+            if seg_dur >= min_seg:
+                keeps.append(KeepRegion(start=pos, end=cut.start))
+            # else: segment too short, absorb into the cut
+        pos = cut.end
+
+    if pos < duration and (duration - pos) >= min_seg:
+        keeps.append(KeepRegion(start=pos, end=duration))
+
+    return keeps
+
+
+# ── Report Generation ──────────────────────────────────────
+
+
+def print_report(
+    cuts: list[CutRegion],
+    duration: float,
+    preset: str,
+    enhance: bool,
+):
+    """Print dry-run report showing what would happen."""
+    total_cut = sum(c.end - c.start for c in cuts)
+    pct = (total_cut / duration * 100) if duration > 0 else 0
+
+    click.echo()
+    click.echo(click.style("  CAPCUT DRY-RUN REPORT", bold=True))
+    click.echo()
+
+    if cuts:
+        click.echo(f"  Fillers detected: {len(cuts)}")
+        click.echo(f"  Time to remove:   {total_cut:.1f}s ({pct:.1f}% of {duration:.1f}s)")
+        click.echo()
+        click.echo("  Cuts:")
+        for c in cuts[:25]:
+            click.echo(
+                f"    {c.start:7.2f}s → {c.end:7.2f}s  "
+                f"({c.end - c.start:.2f}s)  "
+                f'"{c.word}" '
+                f"[conf: {c.confidence:.2f}]"
+            )
+        if len(cuts) > 25:
+            click.echo(f"    ... and {len(cuts) - 25} more")
+    else:
+        click.echo("  No fillers detected.")
+
+    click.echo()
+    click.echo(f"  EQ preset:    {preset}")
+    click.echo(f"  Enhancement:  {'Resemble Enhance (Studio Sound)' if enhance else 'off'}")
+    click.echo()
+    click.echo("  Pass --execute to process.")
+    click.echo()
+
+
+def print_json_report(cuts: list[CutRegion], duration: float):
+    """Output machine-readable filler report."""
+    output = {
+        "version": VERSION,
+        "duration": duration,
+        "fillers": [
+            {
+                "start": c.start, "end": c.end,
+                "duration": round(c.end - c.start, 3),
+                "word": c.word, "confidence": c.confidence,
+            }
+            for c in cuts
+        ],
+        "total_filler_time": round(sum(c.end - c.start for c in cuts), 3),
+        "filler_count": len(cuts),
+    }
+    click.echo(json.dumps(output, indent=2))
+
+
+# ── Resemble Enhance (Studio Sound) ───────────────────────
+
+
+def enhance_audio(audio_path: Path, output_path: Path, use_cache: bool = True, force_cpu: bool = False) -> Path:
+    """Run Resemble Enhance for AI denoising + bandwidth restoration."""
+    cache_key = file_hash(audio_path)
+    cache_file = ENHANCE_CACHE / f"{cache_key}.wav"
+
+    if use_cache and cache_file.exists():
+        click.echo(f"  Using cached enhancement: {cache_file.name}")
+        # Copy to output
+        subprocess.run(["cp", str(cache_file), str(output_path)], check=True)
+        return output_path
+
+    click.echo(f"  {CYAN}◐{RESET} Running Resemble Enhance...")
+    t0 = time.time()
+
+    # Enable MPS fallback for unsupported ops (weight_norm)
+    os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
+
+    # Let tqdm show chunk progress (resemble_enhance uses trange over 30s chunks)
+    os.environ.pop("TQDM_DISABLE", None)
+
+    import torch
+    import torchaudio
+
+    # Determine device — force CPU to avoid MPS memory pressure crashes
+    if force_cpu or not torch.backends.mps.is_available():
+        device = "cpu"
+        click.echo(f"    {DIM}Device: CPU{' (forced — stable)' if force_cpu else ''}{RESET}")
+    else:
+        device = "mps"
+        click.echo(f"    {DIM}Device: Metal (MPS){RESET}")
+
+    # Load audio
+    click.echo(f"    {DIM}Loading audio...{RESET}")
+    audio, sr = torchaudio.load(str(audio_path))
+    if audio.shape[0] > 1:
+        audio = audio.mean(dim=0, keepdim=True)
+    audio = audio.squeeze()
+    dur_sec = len(audio) / sr
+    click.echo(f"    {DIM}{dur_sec:.0f}s @ {sr}Hz → denoise + bandwidth restore{RESET}")
+
+    # Run enhancement
+    from resemble_enhance.enhancer.inference import enhance
+
+    enhanced, new_sr = enhance(
+        audio,
+        sr,
+        device=device,
+        nfe=64,
+        solver="midpoint",
+        lambd=0.1,
+        tau=0.5,
+    )
+
+    # Save
+    if enhanced.dim() == 1:
+        enhanced = enhanced.unsqueeze(0)
+    torchaudio.save(str(output_path), enhanced.cpu(), new_sr)
+
+    elapsed = time.time() - t0
+    click.echo(f"    {DIM}Enhanced in {elapsed:.1f}s{RESET}")
+
+    # Cache
+    ENHANCE_CACHE.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["cp", str(output_path), str(cache_file)], check=True)
+
+    return output_path
+
+
+# ── EQ Presets ─────────────────────────────────────────────
+
+
+def load_presets() -> dict:
+    """Load EQ presets from config."""
+    if PRESETS_FILE.exists():
+        return json.loads(PRESETS_FILE.read_text())
+    return {
+        "victor": {"chain": DEFAULT_PRESET_CHAIN},
+        "raw": {"chain": "loudnorm=I=-16:TP=-1.5:LRA=11"},
+        "none": {"chain": ""},
+    }
+
+
+def get_eq_chain(preset: str, custom_eq: str | None) -> str:
+    """Resolve EQ filter chain from preset or custom override."""
+    if custom_eq:
+        return custom_eq
+    presets = load_presets()
+    if preset not in presets:
+        raise click.ClickException(
+            f"Unknown preset '{preset}'. Available: {', '.join(presets.keys())}"
+        )
+    return presets[preset].get("chain", "")
+
+
+# ── FFmpeg Command Building ────────────────────────────────
+
+
+def build_cut_cmd(
+    input_path: Path,
+    output_path: Path,
+    keeps: list[KeepRegion],
+    eq_chain: str,
+    has_vid: bool,
+    crossfade_ms: float,
+    verbose: bool,
+) -> list[str]:
+    """Build ffmpeg command for cutting + EQ in one pass."""
+    n = len(keeps)
+
+    if n == 0:
+        raise click.ClickException("No keep regions — entire file would be removed")
+
+    if n == 1:
+        # Simple trim, no concat needed
+        k = keeps[0]
+        cmd = ["ffmpeg", "-y"]
+        if not verbose:
+            cmd += ["-v", "quiet", "-stats"]
+        cmd += ["-i", str(input_path)]
+
+        if has_vid:
+            cmd += ["-ss", str(k.start), "-to", str(k.end)]
+            if eq_chain:
+                cmd += ["-af", eq_chain]
+            cmd += [
+                "-c:v", "h264_videotoolbox", "-q:v", "65",
+                "-c:a", "aac_at", "-b:a", "192k", "-ar", "48000",
+            ]
+        else:
+            cmd += ["-ss", str(k.start), "-to", str(k.end)]
+            if eq_chain:
+                cmd += ["-af", eq_chain]
+            cmd += ["-c:a", "aac_at", "-b:a", "192k", "-ar", "48000"]
+
+        cmd.append(str(output_path))
+        return cmd
+
+    # Multiple segments: use concat demuxer approach for reliability
+    # Build segment list, trim each, then concat
+    cf = crossfade_ms / 1000.0
+
+    # For complex filtergraph approach (< 200 segments) — single-pass, no sync drift
+    if n <= 200:
+        return _build_filtergraph_cmd(
+            input_path, output_path, keeps, eq_chain, has_vid, cf, verbose
+        )
+    else:
+        return _build_segment_cmd(
+            input_path, output_path, keeps, eq_chain, has_vid, verbose
+        )
+
+
+def _build_filtergraph_cmd(
+    input_path: Path,
+    output_path: Path,
+    keeps: list[KeepRegion],
+    eq_chain: str,
+    has_vid: bool,
+    crossfade: float,
+    verbose: bool,
+) -> list[str]:
+    """Build single-pass complex filtergraph for < 50 segments."""
+    n = len(keeps)
+    cmd = ["ffmpeg", "-y"]
+    if not verbose:
+        cmd += ["-v", "quiet", "-stats"]
+
+    if has_vid:
+        cmd += ["-hwaccel", "videotoolbox"]
+
+    cmd += ["-i", str(input_path)]
+
+    # Build audio filtergraph
+    audio_parts = []
+    video_parts = []
+
+    for i, k in enumerate(keeps):
+        audio_parts.append(
+            f"[0:a]atrim=start={k.start:.3f}:end={k.end:.3f},asetpts=PTS-STARTPTS[a{i}]"
+        )
+        if has_vid:
+            video_parts.append(
+                f"[0:v]trim=start={k.start:.3f}:end={k.end:.3f},setpts=PTS-STARTPTS[v{i}]"
+            )
+
+    # Concat audio segments
+    audio_labels = "".join(f"[a{i}]" for i in range(n))
+    audio_concat = f"{audio_labels}concat=n={n}:v=0:a=1[aconcat]"
+
+    # Apply EQ after concat
+    if eq_chain:
+        audio_final = f"[aconcat]{eq_chain}[aout]"
+        audio_out = "[aout]"
+    else:
+        audio_final = None
+        audio_out = "[aconcat]"
+
+    # Build full filtergraph
+    fg_parts = audio_parts + [audio_concat]
+    if audio_final:
+        fg_parts.append(audio_final)
+
+    if has_vid:
+        fg_parts.extend(video_parts)
+        video_labels = "".join(f"[v{i}]" for i in range(n))
+        video_concat = f"{video_labels}concat=n={n}:v=1:a=0[vout]"
+        fg_parts.append(video_concat)
+
+    filtergraph = ";".join(fg_parts)
+    cmd += ["-filter_complex", filtergraph]
+
+    if has_vid:
+        cmd += [
+            "-map", "[vout]", "-map", audio_out,
+            "-c:v", "h264_videotoolbox", "-q:v", "65",
+            "-c:a", "aac_at", "-b:a", "192k", "-ar", "48000",
+        ]
+    else:
+        cmd += [
+            "-map", audio_out,
+            "-c:a", "aac_at", "-b:a", "192k", "-ar", "48000",
+        ]
+
+    cmd.append(str(output_path))
+    return cmd
+
+
+def _build_segment_cmd(
+    input_path: Path,
+    output_path: Path,
+    keeps: list[KeepRegion],
+    eq_chain: str,
+    has_vid: bool,
+    verbose: bool,
+) -> list[str]:
+    """Segment-based concat for 50+ cuts. Uses concat demuxer."""
+    # Write segment list to temp file alongside output
+    tmp_dir = output_path.parent
+    segments_dir = tmp_dir / "segments"
+    segments_dir.mkdir(exist_ok=True)
+
+    # Extract each keep region — re-encode for frame-accurate cuts
+    segment_files = []
+    n = len(keeps)
+    if not IS_TTY:
+        click.echo(f"  {CYAN}◐{RESET} Cutting {n} segments...")
+    milestones = {25, 50, 75, 100}
+    for i, k in enumerate(keeps):
+        seg_file = segments_dir / f"seg_{i:04d}.mp4"
+        progress_tick(i, n, "Cutting segment", milestones)
+        seg_dur = k.end - k.start
+        # Apply 15ms audio fade in/out on each segment for smooth transitions
+        fade_out_start = max(0, seg_dur - 0.015)
+        af = f"afade=t=in:d=0.015,afade=t=out:st={fade_out_start:.4f}:d=0.015"
+        cmd = ["ffmpeg", "-y", "-v", "quiet",
+               "-i", str(input_path),
+               "-ss", str(k.start), "-to", str(seg_dur),
+               "-c:v", "h264_videotoolbox", "-q:v", "65",
+               "-af", af, "-c:a", "aac_at", "-b:a", "192k",
+               str(seg_file)]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise click.ClickException(f"Segment {i} extraction failed: {result.stderr.strip()}")
+        segment_files.append(seg_file)
+    if IS_TTY:
+        sys.stdout.write(f"\r{CLEAR_LINE}")
+        sys.stdout.flush()
+
+    # Write concat demuxer file
+    concat_file = tmp_dir / "concat.txt"
+    with open(concat_file, "w") as f:
+        for seg in segment_files:
+            f.write(f"file '{seg}'\n")
+
+    # Build concat + EQ command (per-segment fades already baked in)
+    cmd = ["ffmpeg", "-y"]
+    if not verbose:
+        cmd += ["-v", "quiet", "-stats"]
+    cmd += ["-f", "concat", "-safe", "0", "-i", str(concat_file)]
+
+    if eq_chain:
+        cmd += ["-af", eq_chain]
+
+    if has_vid:
+        # Segments already re-encoded to H.264 — concat can stream copy video
+        if eq_chain:
+            cmd += ["-c:v", "copy", "-af", eq_chain,
+                    "-c:a", "aac_at", "-b:a", "192k", "-ar", "48000"]
+        else:
+            cmd += ["-c", "copy"]
+    else:
+        if eq_chain:
+            cmd += ["-af", eq_chain, "-c:a", "aac_at", "-b:a", "192k", "-ar", "48000"]
+        else:
+            cmd += ["-c:a", "copy"]
+
+    cmd.append(str(output_path))
+    return cmd
+
+
+def build_eq_only_cmd(
+    input_path: Path,
+    output_path: Path,
+    eq_chain: str,
+    has_vid: bool,
+    verbose: bool,
+) -> list[str]:
+    """Build ffmpeg command for EQ-only processing (no cuts)."""
+    cmd = ["ffmpeg", "-y"]
+    if not verbose:
+        cmd += ["-v", "quiet", "-stats"]
+
+    cmd += ["-i", str(input_path)]
+
+    if has_vid:
+        if eq_chain:
+            cmd += ["-af", eq_chain]
+        cmd += [
+            "-c:v", "copy",
+            "-c:a", "aac_at", "-b:a", "192k", "-ar", "48000",
+        ]
+    else:
+        if eq_chain:
+            cmd += ["-af", eq_chain]
+        cmd += ["-c:a", "aac_at", "-b:a", "192k", "-ar", "48000"]
+
+    cmd.append(str(output_path))
+    return cmd
+
+
+def replace_audio_in_video(
+    video_path: Path,
+    audio_path: Path,
+    output_path: Path,
+    eq_chain: str,
+    verbose: bool,
+) -> list[str]:
+    """Mux enhanced audio back into video container."""
+    cmd = ["ffmpeg", "-y"]
+    if not verbose:
+        cmd += ["-v", "quiet", "-stats"]
+    cmd += [
+        "-i", str(video_path),
+        "-i", str(audio_path),
+        "-map", "0:v", "-map", "1:a",
+    ]
+    if eq_chain:
+        cmd += ["-af", eq_chain]
+    cmd += [
+        "-c:v", "copy",
+        "-c:a", "aac_at", "-b:a", "192k", "-ar", "48000",
+    ]
+    cmd.append(str(output_path))
+    return cmd
+
+
+# ── Execution ──────────────────────────────────────────────
+
+
+def run_ffmpeg(cmd: list[str]):
+    """Execute an ffmpeg command."""
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        stderr = result.stderr.strip()
+        # Extract the useful error line
+        lines = stderr.split("\n")
+        error_lines = [l for l in lines if "error" in l.lower() or "Error" in l]
+        msg = error_lines[-1] if error_lines else lines[-1] if lines else "Unknown error"
+        raise click.ClickException(f"ffmpeg failed: {msg}")
+
+
+def write_audit(record: dict):
+    """Append to audit log."""
+    AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with open(AUDIT_LOG, "a") as f:
+        f.write(json.dumps(record, default=str) + "\n")
+
+
+# ── CLI ────────────────────────────────────────────────────
+
+
+@click.group()
+@click.option("--execute", is_flag=True, help="Actually process (default is dry-run)")
+@click.option("--preset", "-p", default="victor", help="EQ preset: victor, podcast, raw, none")
+@click.option("--eq", "custom_eq", default=None, help="Custom ffmpeg audio filter chain")
+@click.option("--enhance/--no-enhance", default=False, help="Toggle Resemble Enhance (off by default, use --enhance for noisy sources)")
+@click.option("--margin", default=120, type=int, help="Safety margin around filler cuts (ms)")
+@click.option("--crossfade", default=20, type=int, help="Crossfade at cut points (ms)")
+@click.option("--model", default="mlx-community/whisper-large-v3-turbo", help="Whisper model")
+@click.option("--output", "-o", default=None, type=click.Path(), help="Output path")
+@click.option("--min-confidence", default=0.5, type=float, help="Whisper confidence threshold")
+@click.option("--verbose", "-v", is_flag=True, help="Verbose ffmpeg output")
+@click.option("--json-output", "json_out", is_flag=True, help="Machine-readable JSON output")
+@click.option("--max-gap", default=300, type=int, help="Compress word gaps longer than this (ms, 0=off)")
+@click.option("--cut-range", multiple=True, help="Manual cut range as start-end in seconds (e.g. 570.5-695.9)")
+@click.option("--keep-transcript", is_flag=True, help="Save transcript JSON alongside output")
+@click.option("--cpu", is_flag=True, help="Force CPU for Resemble Enhance (avoids MPS crashes)")
+@click.pass_context
+def cli(ctx, execute, preset, custom_eq, enhance, margin,
+        crossfade, model, output, min_confidence, verbose, json_out, max_gap, cut_range, keep_transcript, cpu):
+    """declip — Filler removal + Studio Sound + Voice EQ.
+
+    \b
+    Usage:
+      declip process <file>            # Dry-run report
+      declip process <file> --execute  # Full pipeline
+      declip transcribe <file>         # Transcript only
+      declip detect <file>             # Filler report
+      declip clean <file> --execute    # Filler removal only
+      declip enhance <file> --execute  # Studio Sound only
+    """
+    ctx.ensure_object(dict)
+    ctx.obj.update({
+        "execute": execute, "preset": preset, "custom_eq": custom_eq,
+        "enhance": enhance, "margin": margin, "crossfade": crossfade,
+        "model": model, "output": output, "min_confidence": min_confidence,
+        "verbose": verbose, "json_out": json_out, "max_gap": max_gap,
+        "cut_range": cut_range, "keep_transcript": keep_transcript,
+        "cpu": cpu,
+    })
+
+
+@cli.command()
+@click.argument("input_file", type=click.Path(exists=True))
+@click.pass_context
+def process(ctx, input_file):
+    """Full pipeline: transcribe → detect → cut → enhance → EQ."""
+    opts = ctx.obj
+    path = Path(input_file)
+    info = probe_media(path)
+
+    if not has_audio(info):
+        raise click.ClickException("No audio stream found in input file")
+
+    duration = get_duration(info)
+    is_video = has_video(info)
+    eq_chain = get_eq_chain(opts["preset"], opts["custom_eq"])
+
+    ui_file_info(path, info, duration)
+
+    with tempfile.TemporaryDirectory(prefix="declip_") as tmp:
+        tmp_dir = Path(tmp)
+
+        # Step 1: Extract audio for Whisper (16kHz mono)
+        with Spinner("Extracting audio..."):
+            t0 = time.time()
+            wav_path = extract_audio(path, tmp_dir)
+        ui_done("Audio extracted", f"{time.time() - t0:.1f}s")
+
+        # Step 2: Transcribe
+        with Spinner(f"Transcribing with {opts['model'].split('/')[-1]}..."):
+            t0 = time.time()
+            transcript = transcribe(wav_path, opts["model"])
+        word_count = sum(len(s.get("words", [])) for s in transcript.get("segments", []))
+        ui_done("Transcribed", f"{time.time() - t0:.1f}s · {word_count:,} words")
+
+        # Step 3: Detect fillers
+        with Spinner("Detecting fillers..."):
+            fillers = load_fillers()
+            filler_cuts = detect_fillers(
+                transcript, fillers,
+                min_confidence=opts["min_confidence"],
+                margin_ms=opts["margin"],
+            )
+        if filler_cuts:
+            ui_done(f"{len(filler_cuts)} fillers found", f"{sum(c.end - c.start for c in filler_cuts):.1f}s")
+        else:
+            ui_done("No fillers detected")
+
+        # Step 3b: Detect oversized gaps
+        gap_cuts = []
+        if opts["max_gap"] > 0:
+            with Spinner(f"Compressing gaps >{opts['max_gap']}ms..."):
+                gap_cuts = detect_gaps(transcript, max_gap_ms=opts["max_gap"])
+            if gap_cuts:
+                ui_done(f"{len(gap_cuts)} gaps compressed", f"{sum(c.end - c.start for c in gap_cuts):.1f}s")
+            else:
+                ui_done("No oversized gaps")
+
+        # Step 3c: Detect retakes (repeated lines — keep latest take)
+        retake_cuts = []
+        with Spinner("Detecting retakes..."):
+            retake_cuts = detect_retakes(transcript)
+        if retake_cuts:
+            ui_done(f"{len(retake_cuts)} retakes found", f"{sum(c.end - c.start for c in retake_cuts):.1f}s")
+        else:
+            ui_done("No retakes detected")
+
+        # Manual cut ranges
+        manual_cuts = []
+        for cr in opts.get("cut_range", []):
+            try:
+                start_s, end_s = cr.split("-", 1)
+                manual_cuts.append(CutRegion(
+                    start=float(start_s), end=float(end_s),
+                    word=f"manual cut ({float(end_s) - float(start_s):.1f}s)",
+                    confidence=1.0,
+                ))
+            except ValueError:
+                ui_warn(f"Invalid cut range: {cr} (expected start-end)")
+        if manual_cuts:
+            ui_done(f"{len(manual_cuts)} manual cuts", f"{sum(c.end - c.start for c in manual_cuts):.1f}s")
+
+        # Merge all cuts
+        all_cuts = filler_cuts + gap_cuts + retake_cuts + manual_cuts
+        cuts = merge_cuts(sorted(all_cuts, key=lambda c: c.start), margin_ms=0)
+        total_cut = sum(c.end - c.start for c in cuts)
+
+        if opts["json_out"]:
+            print_json_report(cuts, duration)
+            return
+
+        if not opts["execute"]:
+            print_report(cuts, duration, opts["preset"], opts["enhance"])
+            return
+
+        # Step 4: Execute cuts
+        output_path = Path(opts["output"]) if opts["output"] else path.with_stem(f"{path.stem}_clean")
+
+        if cuts:
+            with Spinner(f"Cutting {len(cuts)} fillers..."):
+                t0 = time.time()
+                keeps = invert_cuts(cuts, duration)
+                cut_output = tmp_dir / f"cut{path.suffix}"
+                cmd = build_cut_cmd(
+                    path, cut_output, keeps, "",
+                    is_video, opts["crossfade"], opts["verbose"],
+                )
+                run_ffmpeg(cmd)
+            ui_done(f"Cut {len(cuts)} fillers", f"{time.time() - t0:.1f}s")
+            working_file = cut_output
+        else:
+            ui_done("No fillers to cut")
+            working_file = path
+
+        # Step 4: Enhance (Studio Sound)
+        if opts["enhance"]:
+            with Spinner("Enhancing audio (Studio Sound)..."):
+                t0 = time.time()
+                full_wav = extract_audio_fullrate(working_file, tmp_dir)
+                enhanced_wav = tmp_dir / "enhanced.wav"
+                enhance_audio(full_wav, enhanced_wav, force_cpu=opts.get("cpu", False))
+            ui_done("Enhanced", f"{time.time() - t0:.1f}s")
+
+            # Mux enhanced audio back + apply EQ
+            with Spinner("Applying EQ + muxing..."):
+                t0 = time.time()
+                if is_video:
+                    enhanced_output = tmp_dir / f"enhanced{path.suffix}"
+                    cmd = replace_audio_in_video(
+                        working_file, enhanced_wav, enhanced_output, eq_chain, opts["verbose"]
+                    )
+                    run_ffmpeg(cmd)
+                    working_file = enhanced_output
+                else:
+                    if eq_chain:
+                        eq_output = tmp_dir / f"eq{path.suffix}"
+                        cmd = build_eq_only_cmd(
+                            enhanced_wav, eq_output, eq_chain, False, opts["verbose"]
+                        )
+                        run_ffmpeg(cmd)
+                        working_file = eq_output
+                    else:
+                        working_file = enhanced_wav
+            ui_done("EQ applied", f"{time.time() - t0:.1f}s · preset: {opts['preset']}")
+        else:
+            if eq_chain:
+                with Spinner("Applying EQ..."):
+                    t0 = time.time()
+                    eq_output = tmp_dir / f"eq{path.suffix}"
+                    cmd = build_eq_only_cmd(
+                        working_file, eq_output, eq_chain, is_video, opts["verbose"]
+                    )
+                    run_ffmpeg(cmd)
+                    working_file = eq_output
+                ui_done("EQ applied", f"{time.time() - t0:.1f}s · preset: {opts['preset']}")
+
+        # Finalize
+        with Spinner("Finalizing..."):
+            subprocess.run(["cp", str(working_file), str(output_path)], check=True)
+
+        # Save transcript if requested
+        if opts["keep_transcript"]:
+            t_path = output_path.with_suffix(".transcript.json")
+            t_path.write_text(json.dumps(transcript, indent=2, default=str))
+            ui_done(f"Transcript saved", t_path.name)
+
+        # Audit
+        write_audit({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "input": str(path),
+            "output": str(output_path),
+            "model": opts["model"],
+            "fillers_detected": len(cuts),
+            "time_removed_sec": round(total_cut, 3),
+            "original_duration_sec": round(duration, 1),
+            "preset": opts["preset"],
+            "enhanced": opts["enhance"],
+            "version": VERSION,
+        })
+
+        new_duration = duration - total_cut
+        ui_result(output_path, duration, new_duration, len(cuts), total_cut, opts["preset"], opts["enhance"])
+        click.echo()
+
+
+@cli.command()
+@click.argument("input_file", type=click.Path(exists=True))
+@click.pass_context
+def clean(ctx, input_file):
+    """Filler removal only (no enhancement)."""
+    ctx.obj["enhance"] = False
+    ctx.invoke(process, input_file=input_file)
+
+
+@cli.command()
+@click.argument("input_file", type=click.Path(exists=True))
+@click.pass_context
+def enhance_cmd(ctx, input_file):
+    """Studio Sound enhancement + EQ only (no filler removal)."""
+    opts = ctx.obj
+    path = Path(input_file)
+    info = probe_media(path)
+
+    if not has_audio(info):
+        raise click.ClickException("No audio stream found")
+
+    duration = get_duration(info)
+    is_video = has_video(info)
+    eq_chain = get_eq_chain(opts["preset"], opts["custom_eq"])
+
+    click.echo(f"\n  Input:    {path.name}")
+    click.echo(f"  Duration: {duration:.1f}s")
+
+    if not opts["execute"]:
+        click.echo(f"\n  Would apply:")
+        click.echo(f"    Enhancement: Resemble Enhance (Studio Sound)")
+        click.echo(f"    EQ preset:   {opts['preset']}")
+        click.echo(f"\n  Pass --execute to process.\n")
+        return
+
+    output_path = Path(opts["output"]) if opts["output"] else path.with_stem(f"{path.stem}_clean")
+
+    with tempfile.TemporaryDirectory(prefix="declip_") as tmp:
+        tmp_dir = Path(tmp)
+
+        click.echo("  [1/2] Enhancing audio (Studio Sound)...")
+        full_wav = extract_audio_fullrate(path, tmp_dir)
+        enhanced_wav = tmp_dir / "enhanced.wav"
+        enhance_audio(full_wav, enhanced_wav, force_cpu=opts.get("cpu", False))
+
+        click.echo("  [2/2] Applying EQ + finalizing...")
+        if is_video:
+            cmd = replace_audio_in_video(
+                path, enhanced_wav, output_path, eq_chain, opts["verbose"]
+            )
+            run_ffmpeg(cmd)
+        else:
+            if eq_chain:
+                cmd = build_eq_only_cmd(
+                    enhanced_wav, output_path, eq_chain, False, opts["verbose"]
+                )
+                run_ffmpeg(cmd)
+            else:
+                subprocess.run(["cp", str(enhanced_wav), str(output_path)], check=True)
+
+        write_audit({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "input": str(path),
+            "output": str(output_path),
+            "enhanced": True,
+            "preset": opts["preset"],
+            "version": VERSION,
+        })
+
+        click.echo(f"\n  Done. {path.name} → {output_path.name}")
+        click.echo(f"  Studio Sound + EQ ({opts['preset']}) applied\n")
+
+
+@cli.command("transcribe")
+@click.argument("input_file", type=click.Path(exists=True))
+@click.pass_context
+def transcribe_cmd(ctx, input_file):
+    """Transcription only — outputs JSON."""
+    path = Path(input_file)
+    info = probe_media(path)
+    if not has_audio(info):
+        raise click.ClickException("No audio stream found")
+
+    duration = get_duration(info)
+    ui_file_info(path, info, duration)
+
+    with tempfile.TemporaryDirectory(prefix="declip_") as tmp:
+        with Spinner("Extracting audio..."):
+            wav_path = extract_audio(path, Path(tmp))
+        ui_done("Audio extracted")
+
+        with Spinner(f"Transcribing with {ctx.obj['model'].split('/')[-1]}..."):
+            t0 = time.time()
+            transcript = transcribe(wav_path, ctx.obj["model"])
+        word_count = sum(len(s.get("words", [])) for s in transcript.get("segments", []))
+        ui_done("Transcribed", f"{time.time() - t0:.1f}s · {word_count:,} words")
+
+    click.echo()
+    click.echo(json.dumps(transcript, indent=2, default=str))
+
+
+@cli.command("detect")
+@click.argument("input_file", type=click.Path(exists=True))
+@click.pass_context
+def detect_cmd(ctx, input_file):
+    """Detect fillers and show report."""
+    opts = ctx.obj
+    path = Path(input_file)
+    info = probe_media(path)
+    if not has_audio(info):
+        raise click.ClickException("No audio stream found")
+
+    duration = get_duration(info)
+
+    with tempfile.TemporaryDirectory(prefix="declip_") as tmp:
+        wav_path = extract_audio(path, Path(tmp))
+        transcript = transcribe(wav_path, opts["model"])
+
+    fillers = load_fillers()
+    filler_cuts = detect_fillers(
+        transcript, fillers,
+        min_confidence=opts["min_confidence"],
+        margin_ms=opts["margin"],
+    )
+    gap_cuts = detect_gaps(transcript, max_gap_ms=opts["max_gap"]) if opts["max_gap"] > 0 else []
+    cuts = merge_cuts(sorted(filler_cuts + gap_cuts, key=lambda c: c.start), margin_ms=0)
+
+    if opts["json_out"]:
+        print_json_report(cuts, duration)
+    else:
+        print_report(cuts, duration, opts["preset"], opts["enhance"])
+
+
+# Register enhance subcommand with proper name
+cli.add_command(enhance_cmd, "enhance")
+
+
+if __name__ == "__main__":
+    cli()
