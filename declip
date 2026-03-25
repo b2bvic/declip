@@ -1,10 +1,11 @@
-#!/usr/bin/env -S uv run --script --with mlx-whisper --with click --with resemble-enhance --prerelease=allow --python 3.11 --quiet
+#!/usr/bin/env -S uv run --script --with mlx-whisper --with click --with resemble-enhance --with rich --prerelease=allow --python 3.11 --quiet
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
 #   "mlx-whisper>=0.4",
 #   "click>=8.0",
 #   "resemble-enhance>=0.0.2.dev",
+#   "rich>=13.7",
 # ]
 # ///
 """declip — Filler word removal + Studio Sound enhancement + Voice EQ.
@@ -13,6 +14,7 @@ Built for M4 Pro Metal 4. Replaces Descript.
 Dry-run by default. Pass --execute to process.
 """
 
+import contextlib
 import difflib
 import hashlib
 import json
@@ -22,90 +24,105 @@ import subprocess
 import sys
 import tempfile
 import time
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import NamedTuple
 
-import threading
 import click
+from rich.console import Console
+from rich.panel import Panel
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn, TaskID
+from rich.table import Table
+from rich.text import Text
+from rich.theme import Theme
+from rich import box
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 
-# ── CLI UI ─────────────────────────────────────────────────
+# ── CLI UI — SWS Brand ────────────────────────────────────
 
-SPINNER_FRAMES = "◐◓◑◒"
 MARK = "◎"
 DONE = "●"
-DIM = "\033[2m"
-BOLD = "\033[1m"
-GREEN = "\033[32m"
-CYAN = "\033[36m"
-YELLOW = "\033[33m"
-RED = "\033[31m"
-RESET = "\033[0m"
-CLEAR_LINE = "\033[2K\r"
-
-
 IS_TTY = sys.stdout.isatty()
+
+SWS_THEME = Theme({
+    "accent": "dodger_blue2",
+    "done": "dodger_blue2",
+    "warn": "yellow",
+    "error": "red",
+    "muted": "dim",
+    "stat": "bold dodger_blue2",
+})
+console = Console(highlight=False, theme=SWS_THEME)
+
+# ANSI fallbacks for non-TTY / piped output
+_DIM = "\033[2m"
+_BOLD = "\033[1m"
+_GREEN = "\033[32m"
+_ACCENT = "\033[36m"
+_YELLOW = "\033[33m"
+_RED = "\033[31m"
+_RESET = "\033[0m"
 
 
 class Spinner:
-    """Half-moon rotation spinner — ◐◓◑◒.
-    TTY: animated in-place.  Non-TTY: static ◐ line on enter."""
+    """Context manager wrapping Rich Progress for single-step spinners.
+    TTY: animated ◐◓◑◒ spinner. Non-TTY: static line."""
 
     def __init__(self, message: str):
         self.message = message
-        self._stop = threading.Event()
-        self._thread = None
-        self._frame = 0
+        self._progress = None
 
     def __enter__(self):
         if IS_TTY:
-            self._thread = threading.Thread(target=self._spin, daemon=True)
-            self._thread.start()
+            self._progress = Progress(
+                SpinnerColumn("dots", style="accent", finished_text=f"[done]{DONE}[/done]"),
+                TextColumn("{task.description}"),
+                console=console,
+                transient=True,
+            )
+            self._progress.__enter__()
+            self._task = self._progress.add_task(self.message, total=1)
         else:
-            click.echo(f"  {CYAN}◐{RESET} {self.message}")
+            click.echo(f"  {_ACCENT}◐{_RESET} {self.message}")
         return self
 
     def __exit__(self, *args):
-        self._stop.set()
-        if self._thread:
-            self._thread.join()
-            sys.stdout.write(f"\r{CLEAR_LINE}")
-            sys.stdout.flush()
-
-    def _spin(self):
-        while not self._stop.is_set():
-            frame = SPINNER_FRAMES[self._frame % len(SPINNER_FRAMES)]
-            sys.stdout.write(f"\r{CLEAR_LINE}  {CYAN}{frame}{RESET} {self.message}")
-            sys.stdout.flush()
-            self._frame += 1
-            self._stop.wait(0.1)
+        if self._progress:
+            self._progress.__exit__(*args)
 
     def update(self, message: str):
         self.message = message
+        if self._progress:
+            self._progress.update(self._task, description=message)
 
 
 def progress_tick(i: int, n: int, label: str, milestones: set | None = None):
     """Emit milestone progress lines in non-TTY mode.
     TTY mode: overwrite single line. Non-TTY: print at 25/50/75/100%."""
     if IS_TTY:
-        sys.stdout.write(f"\r{CLEAR_LINE}  {CYAN}◐{RESET} {label} {i + 1}/{n}")
+        pct = int((i + 1) / n * 100) if n > 0 else 100
+        sys.stdout.write(f"\r\033[2K\r  ◐ {label} {i + 1}/{n} ({pct}%)")
         sys.stdout.flush()
         return
-    # Non-TTY: emit at milestone percentages
     if milestones is None:
         return
     pct = int((i + 1) / n * 100) if n > 0 else 100
     if pct in milestones:
         milestones.discard(pct)
-        click.echo(f"    {DIM}{pct}% — {label} {i + 1}/{n}{RESET}")
+        click.echo(f"    {_DIM}{pct}% — {label} {i + 1}/{n}{_RESET}")
 
 
 def ui_banner():
     """Print branded startup mark."""
-    click.echo(f"\n  {CYAN}{MARK}{RESET} {BOLD}declip{RESET} {DIM}v{VERSION}{RESET}")
+    if IS_TTY:
+        console.print(f"\n  [accent]{MARK}[/accent] [bold]declip[/bold] [muted]v{VERSION}[/muted]")
+        console.print(f"  [muted]🌐 Victor Valentine Romo · victorvalentineromo.com · scalewithsearch.com[/muted]")
+    else:
+        click.echo(f"\n  {_ACCENT}{MARK}{_RESET} {_BOLD}declip{_RESET} {_DIM}v{VERSION}{_RESET}")
+        click.echo(f"  {_DIM}\U0001f310 Victor Valentine Romo · victorvalentineromo.com · scalewithsearch.com{_RESET}")
 
 
 def ui_file_info(path: Path, info: dict, duration: float):
@@ -119,34 +136,64 @@ def ui_file_info(path: Path, info: dict, duration: float):
     if astream:
         parts.append(f"{astream.get('codec_name')} {int(astream.get('sample_rate', 0)) // 1000}kHz")
 
-    click.echo(f"\n  {CYAN}{MARK}{RESET} {BOLD}{path.name}{RESET}")
-    click.echo(f"    {DIM}{' · '.join(parts)}{RESET}")
-    click.echo()
+    if IS_TTY:
+        console.print(f"\n  [accent]{MARK}[/accent] [bold]{path.name}[/bold]")
+        console.print(f"    [muted]{' · '.join(parts)}[/muted]")
+        console.print()
+    else:
+        click.echo(f"\n  {_ACCENT}{MARK}{_RESET} {_BOLD}{path.name}{_RESET}")
+        click.echo(f"    {_DIM}{' · '.join(parts)}{_RESET}")
+        click.echo()
 
 
 def ui_done(message: str, detail: str = ""):
     """Print completed step with filled circle."""
-    d = f" {DIM}({detail}){RESET}" if detail else ""
-    click.echo(f"  {GREEN}{DONE}{RESET} {message}{d}")
+    if IS_TTY:
+        d = f" [muted]({detail})[/muted]" if detail else ""
+        console.print(f"  [done]{DONE}[/done] {message}{d}")
+    else:
+        d = f" {_DIM}({detail}){_RESET}" if detail else ""
+        click.echo(f"  {_GREEN}{DONE}{_RESET} {message}{d}")
 
 
 def ui_warn(message: str):
     """Print warning."""
-    click.echo(f"  {YELLOW}○{RESET} {message}")
+    if IS_TTY:
+        console.print(f"  [warn]○[/warn] {message}")
+    else:
+        click.echo(f"  {_YELLOW}○{_RESET} {message}")
 
 
 def ui_error(message: str):
     """Print error."""
-    click.echo(f"  {RED}○{RESET} {message}")
+    if IS_TTY:
+        console.print(f"  [error]○[/error] {message}")
+    else:
+        click.echo(f"  {_RED}○{_RESET} {message}")
 
 
 def ui_result(path: Path, old_duration: float, new_duration: float, n_fillers: float, time_removed: float, preset: str, enhanced: bool):
-    """Print final result — bookend with ◎."""
-    click.echo()
-    click.echo(f"  {CYAN}{MARK}{RESET} {BOLD}{path.name}{RESET}")
-    click.echo(f"    {old_duration / 60:.1f} min → {new_duration / 60:.1f} min {DIM}({n_fillers} fillers, {time_removed:.1f}s removed){RESET}")
-    click.echo(f"    {DIM}Preset: {preset} · Enhanced: {'yes' if enhanced else 'no'}{RESET}")
-    click.echo()
+    """Print final result — branded panel or plain text."""
+    if IS_TTY:
+        body = Text()
+        body.append(f"{old_duration / 60:.1f} min → {new_duration / 60:.1f} min", style="stat")
+        body.append(f"\n{int(n_fillers)} fillers removed ({time_removed:.1f}s)")
+        body.append(f"\nPreset: {preset} · Enhanced: {'yes' if enhanced else 'no'}", style="muted")
+        console.print()
+        console.print(Panel(
+            body,
+            title=f"[accent]{MARK}[/accent] [bold]{path.name}[/bold]",
+            border_style="accent",
+            box=box.ROUNDED,
+            padding=(1, 2),
+        ))
+        console.print()
+    else:
+        click.echo()
+        click.echo(f"  {_ACCENT}{MARK}{_RESET} {_BOLD}{path.name}{_RESET}")
+        click.echo(f"    {old_duration / 60:.1f} min → {new_duration / 60:.1f} min {_DIM}({int(n_fillers)} fillers, {time_removed:.1f}s removed){_RESET}")
+        click.echo(f"    {_DIM}Preset: {preset} · Enhanced: {'yes' if enhanced else 'no'}{_RESET}")
+        click.echo()
 CACHE_DIR = Path.home() / ".cache" / "declip"
 CONFIG_DIR = Path.home() / ".config" / "declip"
 TRANSCRIPT_CACHE = CACHE_DIR / "transcripts"
@@ -647,33 +694,83 @@ def print_report(
     total_cut = sum(c.end - c.start for c in cuts)
     pct = (total_cut / duration * 100) if duration > 0 else 0
 
-    click.echo()
-    click.echo(click.style("  CAPCUT DRY-RUN REPORT", bold=True))
-    click.echo()
+    if IS_TTY:
+        console.print()
+        if cuts:
+            # Summary stats
+            summary = Text()
+            summary.append(f"{len(cuts)}", style="stat")
+            summary.append(f" cuts · ")
+            summary.append(f"{total_cut:.1f}s", style="stat")
+            summary.append(f" to remove ({pct:.1f}% of {duration:.1f}s)")
+            console.print(f"  {summary}")
+            console.print()
 
-    if cuts:
-        click.echo(f"  Fillers detected: {len(cuts)}")
-        click.echo(f"  Time to remove:   {total_cut:.1f}s ({pct:.1f}% of {duration:.1f}s)")
-        click.echo()
-        click.echo("  Cuts:")
-        for c in cuts[:25]:
-            click.echo(
-                f"    {c.start:7.2f}s → {c.end:7.2f}s  "
-                f"({c.end - c.start:.2f}s)  "
-                f'"{c.word}" '
-                f"[conf: {c.confidence:.2f}]"
+            # Cuts table
+            table = Table(
+                box=box.SIMPLE,
+                show_header=True,
+                header_style="bold dodger_blue2",
+                row_styles=["", "dim"],
+                padding=(0, 1),
+                pad_edge=False,
             )
-        if len(cuts) > 25:
-            click.echo(f"    ... and {len(cuts) - 25} more")
-    else:
-        click.echo("  No fillers detected.")
+            table.add_column("Time", style="bold", no_wrap=True)
+            table.add_column("Dur", justify="right", no_wrap=True)
+            table.add_column("Type")
+            table.add_column("Conf", justify="right", no_wrap=True)
 
-    click.echo()
-    click.echo(f"  EQ preset:    {preset}")
-    click.echo(f"  Enhancement:  {'Resemble Enhance (Studio Sound)' if enhance else 'off'}")
-    click.echo()
-    click.echo("  Pass --execute to process.")
-    click.echo()
+            display_cuts = cuts[:30]
+            for c in display_cuts:
+                dur = c.end - c.start
+                conf_style = "dodger_blue2" if c.confidence >= 0.8 else ("yellow" if c.confidence >= 0.5 else "red")
+                table.add_row(
+                    f"{c.start:7.2f}s → {c.end:7.2f}s",
+                    f"{dur:.2f}s",
+                    c.word,
+                    Text(f"{c.confidence:.2f}", style=conf_style),
+                )
+            if len(cuts) > 30:
+                table.add_row("", "", f"[muted]... +{len(cuts) - 30} more[/muted]", "")
+
+            console.print(table)
+        else:
+            console.print("  No fillers detected.")
+
+        console.print()
+        console.print(f"  [muted]EQ preset:[/muted]    {preset}")
+        enhance_label = "Resemble Enhance (Studio Sound)" if enhance else "off"
+        console.print(f"  [muted]Enhancement:[/muted]  {enhance_label}")
+        console.print()
+        console.print("  Pass [bold]--execute[/bold] to process.")
+        console.print()
+    else:
+        # Non-TTY fallback — plain text
+        click.echo()
+        click.echo(f"  DECLIP DRY-RUN REPORT")
+        click.echo()
+        if cuts:
+            click.echo(f"  Fillers detected: {len(cuts)}")
+            click.echo(f"  Time to remove:   {total_cut:.1f}s ({pct:.1f}% of {duration:.1f}s)")
+            click.echo()
+            click.echo("  Cuts:")
+            for c in cuts[:25]:
+                click.echo(
+                    f"    {c.start:7.2f}s → {c.end:7.2f}s  "
+                    f"({c.end - c.start:.2f}s)  "
+                    f'"{c.word}" '
+                    f"[conf: {c.confidence:.2f}]"
+                )
+            if len(cuts) > 25:
+                click.echo(f"    ... and {len(cuts) - 25} more")
+        else:
+            click.echo("  No fillers detected.")
+        click.echo()
+        click.echo(f"  EQ preset:    {preset}")
+        click.echo(f"  Enhancement:  {'Resemble Enhance (Studio Sound)' if enhance else 'off'}")
+        click.echo()
+        click.echo("  Pass --execute to process.")
+        click.echo()
 
 
 def print_json_report(cuts: list[CutRegion], duration: float):
@@ -709,7 +806,7 @@ def enhance_audio(audio_path: Path, output_path: Path, use_cache: bool = True, f
         subprocess.run(["cp", str(cache_file), str(output_path)], check=True)
         return output_path
 
-    click.echo(f"  {CYAN}◐{RESET} Running Resemble Enhance...")
+    click.echo(f"  {_ACCENT}◐{_RESET} Running Resemble Enhance...")
     t0 = time.time()
 
     # Enable MPS fallback for unsupported ops (weight_norm)
@@ -724,19 +821,19 @@ def enhance_audio(audio_path: Path, output_path: Path, use_cache: bool = True, f
     # Determine device — force CPU to avoid MPS memory pressure crashes
     if force_cpu or not torch.backends.mps.is_available():
         device = "cpu"
-        click.echo(f"    {DIM}Device: CPU{' (forced — stable)' if force_cpu else ''}{RESET}")
+        click.echo(f"    {_DIM}Device: CPU{' (forced — stable)' if force_cpu else ''}{_RESET}")
     else:
         device = "mps"
-        click.echo(f"    {DIM}Device: Metal (MPS){RESET}")
+        click.echo(f"    {_DIM}Device: Metal (MPS){_RESET}")
 
     # Load audio
-    click.echo(f"    {DIM}Loading audio...{RESET}")
+    click.echo(f"    {_DIM}Loading audio...{_RESET}")
     audio, sr = torchaudio.load(str(audio_path))
     if audio.shape[0] > 1:
         audio = audio.mean(dim=0, keepdim=True)
     audio = audio.squeeze()
     dur_sec = len(audio) / sr
-    click.echo(f"    {DIM}{dur_sec:.0f}s @ {sr}Hz → denoise + bandwidth restore{RESET}")
+    click.echo(f"    {_DIM}{dur_sec:.0f}s @ {sr}Hz → denoise + bandwidth restore{_RESET}")
 
     # Run enhancement
     from resemble_enhance.enhancer.inference import enhance
@@ -757,7 +854,7 @@ def enhance_audio(audio_path: Path, output_path: Path, use_cache: bool = True, f
     torchaudio.save(str(output_path), enhanced.cpu(), new_sr)
 
     elapsed = time.time() - t0
-    click.echo(f"    {DIM}Enhanced in {elapsed:.1f}s{RESET}")
+    click.echo(f"    {_DIM}Enhanced in {elapsed:.1f}s{_RESET}")
 
     # Cache
     ENHANCE_CACHE.mkdir(parents=True, exist_ok=True)
@@ -943,7 +1040,7 @@ def _build_segment_cmd(
     segment_files = []
     n = len(keeps)
     if not IS_TTY:
-        click.echo(f"  {CYAN}◐{RESET} Cutting {n} segments...")
+        click.echo(f"  {_ACCENT}◐{_RESET} Cutting {n} segments...")
     milestones = {25, 50, 75, 100}
     for i, k in enumerate(keeps):
         seg_file = segments_dir / f"seg_{i:04d}.mp4"
@@ -963,7 +1060,7 @@ def _build_segment_cmd(
             raise click.ClickException(f"Segment {i} extraction failed: {result.stderr.strip()}")
         segment_files.append(seg_file)
     if IS_TTY:
-        sys.stdout.write(f"\r{CLEAR_LINE}")
+        sys.stdout.write(f"\r\033[2K")
         sys.stdout.flush()
 
     # Write concat demuxer file
@@ -1095,9 +1192,10 @@ def write_audit(record: dict):
 @click.option("--cut-range", multiple=True, help="Manual cut range as start-end in seconds (e.g. 570.5-695.9)")
 @click.option("--keep-transcript", is_flag=True, help="Save transcript JSON alongside output")
 @click.option("--cpu", is_flag=True, help="Force CPU for Resemble Enhance (avoids MPS crashes)")
+@click.option("--export", "export_fmt", type=click.Choice(["edl", "srt", "markers", "fcpxml"]), default=None, help="Export cut list for NLE (edl, srt, markers, fcpxml)")
 @click.pass_context
 def cli(ctx, execute, preset, custom_eq, enhance, margin,
-        crossfade, model, output, min_confidence, verbose, json_out, max_gap, cut_range, keep_transcript, cpu):
+        crossfade, model, output, min_confidence, verbose, json_out, max_gap, cut_range, keep_transcript, cpu, export_fmt):
     """declip — Filler removal + Studio Sound + Voice EQ.
 
     \b
@@ -1108,6 +1206,7 @@ def cli(ctx, execute, preset, custom_eq, enhance, margin,
       declip detect <file>             # Filler report
       declip clean <file> --execute    # Filler removal only
       declip enhance <file> --execute  # Studio Sound only
+      declip config show               # View settings
     """
     ctx.ensure_object(dict)
     ctx.obj.update({
@@ -1116,7 +1215,7 @@ def cli(ctx, execute, preset, custom_eq, enhance, margin,
         "model": model, "output": output, "min_confidence": min_confidence,
         "verbose": verbose, "json_out": json_out, "max_gap": max_gap,
         "cut_range": cut_range, "keep_transcript": keep_transcript,
-        "cpu": cpu,
+        "cpu": cpu, "export_fmt": export_fmt,
     })
 
 
@@ -1205,6 +1304,16 @@ def process(ctx, input_file):
         all_cuts = filler_cuts + gap_cuts + retake_cuts + manual_cuts
         cuts = merge_cuts(sorted(all_cuts, key=lambda c: c.start), margin_ms=0)
         total_cut = sum(c.end - c.start for c in cuts)
+
+        # Export cut list if requested (works in both dry-run and execute)
+        if opts.get("export_fmt"):
+            keeps_for_export = invert_cuts(cuts, duration)
+            fps = get_video_fps(info) if has_video(info) else 30.0
+            out = do_export(
+                opts["export_fmt"], cuts, keeps_for_export, duration, path, fps,
+                transcript=transcript, info=info,
+            )
+            ui_done(f"Exported {opts['export_fmt'].upper()}", str(out.name))
 
         if opts["json_out"]:
             print_json_report(cuts, duration)
@@ -1431,6 +1540,15 @@ def detect_cmd(ctx, input_file):
     gap_cuts = detect_gaps(transcript, max_gap_ms=opts["max_gap"]) if opts["max_gap"] > 0 else []
     cuts = merge_cuts(sorted(filler_cuts + gap_cuts, key=lambda c: c.start), margin_ms=0)
 
+    if opts.get("export_fmt"):
+        keeps_for_export = invert_cuts(cuts, duration)
+        fps = get_video_fps(info) if has_video(info) else 30.0
+        out = do_export(
+            opts["export_fmt"], cuts, keeps_for_export, duration, path, fps,
+            transcript=transcript, info=info,
+        )
+        ui_done(f"Exported {opts['export_fmt'].upper()}", str(out.name))
+
     if opts["json_out"]:
         print_json_report(cuts, duration)
     else:
@@ -1439,6 +1557,357 @@ def detect_cmd(ctx, input_file):
 
 # Register enhance subcommand with proper name
 cli.add_command(enhance_cmd, "enhance")
+
+
+# ── Export Formats ─────────────────────────────────────────
+
+
+def get_video_fps(info: dict) -> float:
+    """Extract framerate from probe info."""
+    vstream = next((s for s in info.get("streams", []) if s.get("codec_type") == "video" and s.get("codec_name") != "mjpeg"), None)
+    if not vstream:
+        return 30.0
+    rate = vstream.get("r_frame_rate", "30/1")
+    if "/" in rate:
+        num, den = rate.split("/")
+        return float(num) / float(den) if float(den) != 0 else 30.0
+    return float(rate)
+
+
+def _tc(seconds: float, fps: float) -> str:
+    """Convert seconds to HH:MM:SS:FF timecode."""
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    f = int((seconds % 1) * fps)
+    return f"{h:02d}:{m:02d}:{s:02d}:{f:02d}"
+
+
+def _srt_tc(seconds: float) -> str:
+    """Convert seconds to SRT timecode HH:MM:SS,mmm."""
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    ms = int((seconds % 1) * 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def export_edl(cuts: list[CutRegion], keeps: list[KeepRegion], duration: float, input_path: Path, fps: float, **kw) -> str:
+    """Export CMX 3600 EDL for DaVinci Resolve / Premiere."""
+    lines = [
+        f"TITLE: {input_path.stem} declip cut list",
+        "FCM: NON-DROP FRAME",
+        "",
+    ]
+    record_offset = 0.0
+    for i, k in enumerate(keeps):
+        src_in = _tc(k.start, fps)
+        src_out = _tc(k.end, fps)
+        rec_in = _tc(record_offset, fps)
+        rec_out = _tc(record_offset + (k.end - k.start), fps)
+        lines.append(f"{i + 1:03d}  AX       AA/V  C        {src_in} {src_out} {rec_in} {rec_out}")
+        record_offset += k.end - k.start
+    lines.append("")
+    return "\n".join(lines)
+
+
+def export_srt(transcript: dict, **kw) -> str:
+    """Export SRT subtitles from transcript."""
+    lines = []
+    idx = 1
+    for segment in transcript.get("segments", []):
+        text = segment.get("text", "").strip()
+        if not text:
+            continue
+        start = segment.get("start", 0)
+        end = segment.get("end", 0)
+        lines.append(str(idx))
+        lines.append(f"{_srt_tc(start)} --> {_srt_tc(end)}")
+        lines.append(text)
+        lines.append("")
+        idx += 1
+    return "\n".join(lines)
+
+
+def export_markers(cuts: list[CutRegion], **kw) -> str:
+    """Export JSON markers for CapCut."""
+    color_map = {"gap": "#FFB800", "retake": "#FF6B00"}
+    markers = []
+    for c in cuts:
+        cut_type = "gap" if c.word.startswith("gap") else ("retake" if "retake" in c.word else "filler")
+        markers.append({
+            "time_ms": int(c.start * 1000),
+            "duration_ms": int((c.end - c.start) * 1000),
+            "type": cut_type,
+            "label": c.word,
+            "color": color_map.get(cut_type, "#FF0000"),
+        })
+    output = {"version": "1.0", "source": "declip", "markers": markers}
+    return json.dumps(output, indent=2)
+
+
+def export_fcpxml(keeps: list[KeepRegion], input_path: Path, fps: float, info: dict, **kw) -> str:
+    """Export FCPXML v1.11 for Final Cut Pro."""
+    vstream = next((s for s in info.get("streams", []) if s.get("codec_type") == "video" and s.get("codec_name") != "mjpeg"), None)
+    w = vstream.get("width", 1920) if vstream else 1920
+    h = vstream.get("height", 1080) if vstream else 1080
+    total_dur = sum(k.end - k.start for k in keeps)
+
+    # Rational frame duration (e.g. 1001/30000s for 29.97fps)
+    if abs(fps - 29.97) < 0.1:
+        frame_dur = "1001/30000s"
+    elif abs(fps - 23.976) < 0.1:
+        frame_dur = "1001/24000s"
+    else:
+        frame_dur = f"100/{int(fps * 100)}s"
+
+    file_url = input_path.resolve().as_uri()
+    clips = []
+    offset = 0.0
+    for k in keeps:
+        dur = k.end - k.start
+        clips.append(
+            f'            <clip ref="r2" offset="{offset:.4f}s" '
+            f'start="{k.start:.4f}s" duration="{dur:.4f}s" />'
+        )
+        offset += dur
+
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE fcpxml>
+<fcpxml version="1.11">
+  <resources>
+    <format id="r1" frameDuration="{frame_dur}" width="{w}" height="{h}"/>
+    <asset id="r2" src="{file_url}" start="0s" hasVideo="1" hasAudio="1">
+      <format ref="r1"/>
+    </asset>
+  </resources>
+  <library>
+    <event name="declip export">
+      <project name="{input_path.stem} (declip)">
+        <sequence duration="{total_dur:.4f}s" format="r1">
+          <spine>
+{chr(10).join(clips)}
+          </spine>
+        </sequence>
+      </project>
+    </event>
+  </library>
+</fcpxml>"""
+
+
+def do_export(fmt: str, cuts: list[CutRegion], keeps: list[KeepRegion],
+              duration: float, input_path: Path, fps: float,
+              transcript: dict = None, info: dict = None):
+    """Dispatch export to the right format and write to disk."""
+    exporters = {
+        "edl": export_edl,
+        "srt": export_srt,
+        "markers": export_markers,
+        "fcpxml": export_fcpxml,
+    }
+    ext_map = {"edl": ".edl", "srt": ".srt", "markers": ".json", "fcpxml": ".fcpxml"}
+
+    content = exporters[fmt](
+        cuts=cuts, keeps=keeps, duration=duration,
+        input_path=input_path, fps=fps,
+        transcript=transcript or {}, info=info or {},
+    )
+    out_path = input_path.with_suffix(ext_map[fmt])
+    out_path.write_text(content)
+    return out_path
+
+
+# ── Config Subcommand ──────────────────────────────────────
+
+CONFIG_FILE = CONFIG_DIR / "config.json"
+
+DEFAULT_CONFIG = {
+    "version": 1,
+    "defaults": {
+        "preset": "victor",
+        "margin_ms": 120,
+        "max_gap_ms": 300,
+        "min_confidence": 0.5,
+        "enhance": False,
+        "cpu": False,
+    }
+}
+
+
+def load_config() -> dict:
+    """Load config.json, falling back to defaults."""
+    if CONFIG_FILE.exists():
+        try:
+            return json.loads(CONFIG_FILE.read_text())
+        except (json.JSONDecodeError, KeyError):
+            return DEFAULT_CONFIG.copy()
+    return DEFAULT_CONFIG.copy()
+
+
+def save_config(config: dict):
+    """Write config.json."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    CONFIG_FILE.write_text(json.dumps(config, indent=2) + "\n")
+
+
+@cli.group()
+def config():
+    """Manage declip configuration and presets."""
+    pass
+
+
+@config.command("show")
+def config_show():
+    """Display current configuration."""
+    cfg = load_config()
+    defaults = cfg.get("defaults", {})
+
+    if IS_TTY:
+        table = Table(
+            title=f"[accent]{MARK}[/accent] [bold]declip config[/bold]",
+            box=box.ROUNDED,
+            border_style="accent",
+            header_style="bold dodger_blue2",
+            row_styles=["", "dim"],
+        )
+        table.add_column("Setting", style="bold")
+        table.add_column("Value")
+        table.add_column("Source", style="muted")
+
+        for key, default_val in DEFAULT_CONFIG["defaults"].items():
+            val = defaults.get(key, default_val)
+            source = "config" if CONFIG_FILE.exists() and key in defaults else "default"
+            table.add_row(key, str(val), source)
+
+        console.print()
+        console.print(table)
+        console.print()
+    else:
+        click.echo("\n  declip config\n")
+        for key, default_val in DEFAULT_CONFIG["defaults"].items():
+            val = defaults.get(key, default_val)
+            click.echo(f"  {key}: {val}")
+        click.echo()
+
+
+@config.command("set")
+@click.argument("key")
+@click.argument("value")
+def config_set(key, value):
+    """Set a configuration value."""
+    cfg = load_config()
+    defaults = cfg.setdefault("defaults", {})
+
+    if key not in DEFAULT_CONFIG["defaults"]:
+        raise click.ClickException(f"Unknown setting: {key}. Available: {', '.join(DEFAULT_CONFIG['defaults'].keys())}")
+
+    # Type coerce based on default
+    default_val = DEFAULT_CONFIG["defaults"][key]
+    if isinstance(default_val, bool):
+        value = value.lower() in ("true", "1", "yes")
+    elif isinstance(default_val, int):
+        value = int(value)
+    elif isinstance(default_val, float):
+        value = float(value)
+
+    defaults[key] = value
+    save_config(cfg)
+    ui_done(f"{key} = {value}")
+
+
+@config.command("presets")
+def config_presets():
+    """List all EQ presets."""
+    presets = load_presets()
+
+    if IS_TTY:
+        table = Table(
+            title=f"[accent]{MARK}[/accent] [bold]EQ Presets[/bold]",
+            box=box.ROUNDED,
+            border_style="accent",
+            header_style="bold dodger_blue2",
+            row_styles=["", "dim"],
+        )
+        table.add_column("Name", style="bold")
+        table.add_column("Description")
+        table.add_column("Chain", max_width=50, style="muted")
+
+        for name, data in presets.items():
+            desc = data.get("description", "")
+            chain = data.get("chain", "")
+            table.add_row(name, desc, chain[:50] + ("..." if len(chain) > 50 else ""))
+
+        console.print()
+        console.print(table)
+        console.print()
+    else:
+        click.echo("\n  EQ Presets\n")
+        for name, data in presets.items():
+            desc = data.get("description", "")
+            click.echo(f"  {name}: {desc}")
+        click.echo()
+
+
+@config.command("preset-add")
+@click.argument("name")
+@click.option("--chain", prompt="FFmpeg audio filter chain")
+@click.option("--description", prompt="Preset description")
+def config_preset_add(name, chain, description):
+    """Add or update an EQ preset."""
+    presets = load_presets()
+    presets[name] = {"description": description, "chain": chain}
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    PRESETS_FILE.write_text(json.dumps(presets, indent=2) + "\n")
+    ui_done(f"Preset '{name}' saved")
+
+
+@config.command("preset-rm")
+@click.argument("name")
+def config_preset_rm(name):
+    """Remove an EQ preset."""
+    presets = load_presets()
+    if name not in presets:
+        raise click.ClickException(f"Preset '{name}' not found")
+    del presets[name]
+    PRESETS_FILE.write_text(json.dumps(presets, indent=2) + "\n")
+    ui_done(f"Preset '{name}' removed")
+
+
+@config.command("fillers")
+def config_fillers():
+    """Show filler word list."""
+    fillers = load_fillers()
+    if IS_TTY:
+        console.print(f"\n  [accent]{MARK}[/accent] [bold]Filler words[/bold] ({len(fillers)} total)\n")
+        console.print(f"  {', '.join(sorted(fillers))}\n")
+    else:
+        click.echo(f"\n  Filler words ({len(fillers)} total)\n")
+        click.echo(f"  {', '.join(sorted(fillers))}\n")
+
+
+@config.command("filler-add")
+@click.argument("word")
+def config_filler_add(word):
+    """Add a filler word."""
+    fillers = load_fillers()
+    fillers.add(word.lower().strip())
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    FILLERS_FILE.write_text("\n".join(sorted(fillers)) + "\n")
+    ui_done(f"Added filler: {word}")
+
+
+@config.command("filler-rm")
+@click.argument("word")
+def config_filler_rm(word):
+    """Remove a filler word."""
+    fillers = load_fillers()
+    w = word.lower().strip()
+    if w not in fillers:
+        raise click.ClickException(f"'{w}' not in filler list")
+    fillers.discard(w)
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    FILLERS_FILE.write_text("\n".join(sorted(fillers)) + "\n")
+    ui_done(f"Removed filler: {word}")
 
 
 if __name__ == "__main__":
