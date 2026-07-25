@@ -2,6 +2,8 @@
 
 Local filler removal for talking-head video. No cloud, no subscription, no upload. Runs on Apple Silicon.
 
+Part of a larger system: this repository proves **P10 (production means persistence, bounded autonomy, and observability)** and **P15 (perspective becomes products)** from the [Seventeen Principles](https://victorvalentineromo.com/principles).
+
 Replaces Descript's filler word removal + Studio Sound with a single Python script using Whisper (MLX) and ffmpeg.
 
 ## What it does
@@ -101,3 +103,7 @@ Transcripts are cached by file hash. Re-runs skip transcription.
 ## License
 
 MIT
+
+## How this was built
+
+Specification and judgment: human. Implementation: AI models executing that specification under a build contract, with an adversarial audit before publish. The division of labor is the point; see [P07](https://victorvalentineromo.com/principles).

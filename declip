@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import click
+from click.core import ParameterSource
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn, TaskID
@@ -172,12 +173,12 @@ def ui_error(message: str):
         click.echo(f"  {_RED}○{_RESET} {message}")
 
 
-def ui_result(path: Path, old_duration: float, new_duration: float, n_fillers: float, time_removed: float, preset: str, enhanced: bool):
+def ui_result(path: Path, old_duration: float, new_duration: float, n_edits: float, time_removed: float, preset: str, enhanced: bool):
     """Print final result — branded panel or plain text."""
     if IS_TTY:
         body = Text()
         body.append(f"{old_duration / 60:.1f} min → {new_duration / 60:.1f} min", style="stat")
-        body.append(f"\n{int(n_fillers)} fillers removed ({time_removed:.1f}s)")
+        body.append(f"\n{int(n_edits)} edits applied ({time_removed:.1f}s)")
         body.append(f"\nPreset: {preset} · Enhanced: {'yes' if enhanced else 'no'}", style="muted")
         console.print()
         console.print(Panel(
@@ -191,7 +192,7 @@ def ui_result(path: Path, old_duration: float, new_duration: float, n_fillers: f
     else:
         click.echo()
         click.echo(f"  {_ACCENT}{MARK}{_RESET} {_BOLD}{path.name}{_RESET}")
-        click.echo(f"    {old_duration / 60:.1f} min → {new_duration / 60:.1f} min {_DIM}({int(n_fillers)} fillers, {time_removed:.1f}s removed){_RESET}")
+        click.echo(f"    {old_duration / 60:.1f} min → {new_duration / 60:.1f} min {_DIM}({int(n_edits)} edits, {time_removed:.1f}s removed){_RESET}")
         click.echo(f"    {_DIM}Preset: {preset} · Enhanced: {'yes' if enhanced else 'no'}{_RESET}")
         click.echo()
 CACHE_DIR = Path.home() / ".cache" / "declip"
@@ -329,7 +330,7 @@ def file_hash(path: Path) -> str:
 
 def transcribe(audio_path: Path, model_name: str, use_cache: bool = True) -> dict:
     """Transcribe audio using mlx-whisper with Metal acceleration."""
-    cache_key = file_hash(audio_path)
+    cache_key = hashlib.sha256(f"{file_hash(audio_path)}:{model_name}".encode()).hexdigest()[:16]
     cache_file = TRANSCRIPT_CACHE / f"{cache_key}.json"
 
     if use_cache and cache_file.exists():
@@ -447,8 +448,8 @@ def detect_fillers(
 
             # Context rules for ambiguous fillers
             if word_text in CONTEXT_FILLERS:
-                if word_text == "like" and confidence >= min_confidence:
-                    continue  # Probably semantic "I like this"
+                if word_text == "like" and not is_sentence_start(words, i) and not has_following_pause(words, i):
+                    continue  # Mid-sentence "I like this" is usually meaningful
                 if word_text in ("so", "well") and not is_sentence_start(words, i):
                     continue  # Mid-sentence "so" is usually meaningful
                 if word_text == "right" and not has_following_pause(words, i):
@@ -735,7 +736,7 @@ def print_report(
 
             console.print(table)
         else:
-            console.print("  No fillers detected.")
+            console.print("  No edits detected.")
 
         console.print()
         console.print(f"  [muted]EQ preset:[/muted]    {preset}")
@@ -750,7 +751,7 @@ def print_report(
         click.echo(f"  DECLIP DRY-RUN REPORT")
         click.echo()
         if cuts:
-            click.echo(f"  Fillers detected: {len(cuts)}")
+            click.echo(f"  Edits detected:   {len(cuts)}")
             click.echo(f"  Time to remove:   {total_cut:.1f}s ({pct:.1f}% of {duration:.1f}s)")
             click.echo()
             click.echo("  Cuts:")
@@ -764,7 +765,7 @@ def print_report(
             if len(cuts) > 25:
                 click.echo(f"    ... and {len(cuts) - 25} more")
         else:
-            click.echo("  No fillers detected.")
+            click.echo("  No edits detected.")
         click.echo()
         click.echo(f"  EQ preset:    {preset}")
         click.echo(f"  Enhancement:  {'Resemble Enhance (Studio Sound)' if enhance else 'off'}")
@@ -774,7 +775,7 @@ def print_report(
 
 
 def print_json_report(cuts: list[CutRegion], duration: float):
-    """Output machine-readable filler report."""
+    """Output machine-readable edit report."""
     output = {
         "version": VERSION,
         "duration": duration,
@@ -943,7 +944,7 @@ def build_cut_cmd(
         )
     else:
         return _build_segment_cmd(
-            input_path, output_path, keeps, eq_chain, has_vid, verbose
+            input_path, output_path, keeps, eq_chain, has_vid, cf, verbose
         )
 
 
@@ -953,7 +954,7 @@ def _build_filtergraph_cmd(
     keeps: list[KeepRegion],
     eq_chain: str,
     has_vid: bool,
-    crossfade: float,
+    fade_s: float,
     verbose: bool,
 ) -> list[str]:
     """Build single-pass complex filtergraph for < 50 segments."""
@@ -972,8 +973,19 @@ def _build_filtergraph_cmd(
     video_parts = []
 
     for i, k in enumerate(keeps):
+        seg_dur = k.end - k.start
+        audio_chain = (
+            f"[0:a]atrim=start={k.start:.3f}:end={k.end:.3f},asetpts=PTS-STARTPTS"
+        )
+        if fade_s > 0 and seg_dur > 0:
+            fade_dur = min(fade_s, seg_dur / 2)
+            fade_out_start = max(0, seg_dur - fade_dur)
+            audio_chain += (
+                f",afade=t=in:d={fade_dur:.4f}"
+                f",afade=t=out:st={fade_out_start:.4f}:d={fade_dur:.4f}"
+            )
         audio_parts.append(
-            f"[0:a]atrim=start={k.start:.3f}:end={k.end:.3f},asetpts=PTS-STARTPTS[a{i}]"
+            f"{audio_chain}[a{i}]"
         )
         if has_vid:
             video_parts.append(
@@ -1028,6 +1040,7 @@ def _build_segment_cmd(
     keeps: list[KeepRegion],
     eq_chain: str,
     has_vid: bool,
+    fade_s: float,
     verbose: bool,
 ) -> list[str]:
     """Segment-based concat for 50+ cuts. Uses concat demuxer."""
@@ -1046,15 +1059,18 @@ def _build_segment_cmd(
         seg_file = segments_dir / f"seg_{i:04d}.mp4"
         progress_tick(i, n, "Cutting segment", milestones)
         seg_dur = k.end - k.start
-        # Apply 15ms audio fade in/out on each segment for smooth transitions
-        fade_out_start = max(0, seg_dur - 0.015)
-        af = f"afade=t=in:d=0.015,afade=t=out:st={fade_out_start:.4f}:d=0.015"
+        fade_dur = min(fade_s, seg_dur / 2) if fade_s > 0 and seg_dur > 0 else 0
+        fade_out_start = max(0, seg_dur - fade_dur)
+        af = None
+        if fade_dur > 0:
+            af = f"afade=t=in:d={fade_dur:.4f},afade=t=out:st={fade_out_start:.4f}:d={fade_dur:.4f}"
         cmd = ["ffmpeg", "-y", "-v", "quiet",
                "-i", str(input_path),
-               "-ss", str(k.start), "-to", str(seg_dur),
-               "-c:v", "h264_videotoolbox", "-q:v", "65",
-               "-af", af, "-c:a", "aac_at", "-b:a", "192k",
-               str(seg_file)]
+               "-ss", str(k.start), "-t", str(seg_dur),
+               "-c:v", "h264_videotoolbox", "-q:v", "65"]
+        if af:
+            cmd += ["-af", af]
+        cmd += ["-c:a", "aac_at", "-b:a", "192k", str(seg_file)]
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             raise click.ClickException(f"Segment {i} extraction failed: {result.stderr.strip()}")
@@ -1182,20 +1198,21 @@ def write_audit(record: dict):
 @click.option("--eq", "custom_eq", default=None, help="Custom ffmpeg audio filter chain")
 @click.option("--enhance/--no-enhance", default=False, help="Toggle Resemble Enhance (off by default, use --enhance for noisy sources)")
 @click.option("--margin", default=120, type=int, help="Safety margin around filler cuts (ms)")
-@click.option("--crossfade", default=20, type=int, help="Crossfade at cut points (ms)")
+@click.option("--crossfade", default=20, type=int, help="Audio fade at cut points (ms)")
 @click.option("--model", default="mlx-community/whisper-large-v3-turbo", help="Whisper model")
 @click.option("--output", "-o", default=None, type=click.Path(), help="Output path")
 @click.option("--min-confidence", default=0.5, type=float, help="Whisper confidence threshold")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose ffmpeg output")
 @click.option("--json-output", "json_out", is_flag=True, help="Machine-readable JSON output")
 @click.option("--max-gap", default=300, type=int, help="Compress word gaps longer than this (ms, 0=off)")
+@click.option("--retakes/--no-retakes", "remove_retakes", default=True, help="Toggle retake detection (on by default)")
 @click.option("--cut-range", multiple=True, help="Manual cut range as start-end in seconds (e.g. 570.5-695.9)")
 @click.option("--keep-transcript", is_flag=True, help="Save transcript JSON alongside output")
 @click.option("--cpu", is_flag=True, help="Force CPU for Resemble Enhance (avoids MPS crashes)")
 @click.option("--export", "export_fmt", type=click.Choice(["edl", "srt", "markers", "fcpxml"]), default=None, help="Export cut list for NLE (edl, srt, markers, fcpxml)")
 @click.pass_context
 def cli(ctx, execute, preset, custom_eq, enhance, margin,
-        crossfade, model, output, min_confidence, verbose, json_out, max_gap, cut_range, keep_transcript, cpu, export_fmt):
+        crossfade, model, output, min_confidence, verbose, json_out, max_gap, remove_retakes, cut_range, keep_transcript, cpu, export_fmt):
     """declip — Filler removal + Studio Sound + Voice EQ.
 
     \b
@@ -1209,14 +1226,16 @@ def cli(ctx, execute, preset, custom_eq, enhance, margin,
       declip config show               # View settings
     """
     ctx.ensure_object(dict)
-    ctx.obj.update({
+    option_values = {
         "execute": execute, "preset": preset, "custom_eq": custom_eq,
         "enhance": enhance, "margin": margin, "crossfade": crossfade,
         "model": model, "output": output, "min_confidence": min_confidence,
         "verbose": verbose, "json_out": json_out, "max_gap": max_gap,
+        "remove_retakes": remove_retakes,
         "cut_range": cut_range, "keep_transcript": keep_transcript,
         "cpu": cpu, "export_fmt": export_fmt,
-    })
+    }
+    ctx.obj.update(resolve_config_defaults(ctx, option_values))
 
 
 @cli.command()
@@ -1278,12 +1297,15 @@ def process(ctx, input_file):
 
         # Step 3c: Detect retakes (repeated lines — keep latest take)
         retake_cuts = []
-        with Spinner("Detecting retakes..."):
-            retake_cuts = detect_retakes(transcript)
-        if retake_cuts:
-            ui_done(f"{len(retake_cuts)} retakes found", f"{sum(c.end - c.start for c in retake_cuts):.1f}s")
+        if opts.get("remove_retakes", True):
+            with Spinner("Detecting retakes..."):
+                retake_cuts = detect_retakes(transcript)
+            if retake_cuts:
+                ui_done(f"{len(retake_cuts)} retakes found", f"{sum(c.end - c.start for c in retake_cuts):.1f}s")
+            else:
+                ui_done("No retakes detected")
         else:
-            ui_done("No retakes detected")
+            ui_done("Retake detection disabled")
 
         # Manual cut ranges
         manual_cuts = []
@@ -1327,7 +1349,7 @@ def process(ctx, input_file):
         output_path = Path(opts["output"]) if opts["output"] else path.with_stem(f"{path.stem}_clean")
 
         if cuts:
-            with Spinner(f"Cutting {len(cuts)} fillers..."):
+            with Spinner(f"Applying {len(cuts)} edits..."):
                 t0 = time.time()
                 keeps = invert_cuts(cuts, duration)
                 cut_output = tmp_dir / f"cut{path.suffix}"
@@ -1336,10 +1358,10 @@ def process(ctx, input_file):
                     is_video, opts["crossfade"], opts["verbose"],
                 )
                 run_ffmpeg(cmd)
-            ui_done(f"Cut {len(cuts)} fillers", f"{time.time() - t0:.1f}s")
+            ui_done(f"Applied {len(cuts)} edits", f"{time.time() - t0:.1f}s")
             working_file = cut_output
         else:
-            ui_done("No fillers to cut")
+            ui_done("No edits to apply")
             working_file = path
 
         # Step 4: Enhance (Studio Sound)
@@ -1400,7 +1422,11 @@ def process(ctx, input_file):
             "input": str(path),
             "output": str(output_path),
             "model": opts["model"],
-            "fillers_detected": len(cuts),
+            "fillers_detected": len(filler_cuts),
+            "gaps_compressed": len(gap_cuts),
+            "retakes_removed": len(retake_cuts),
+            "manual_cuts": len(manual_cuts),
+            "cuts_applied": len(cuts),
             "time_removed_sec": round(total_cut, 3),
             "original_duration_sec": round(duration, 1),
             "preset": opts["preset"],
@@ -1419,6 +1445,8 @@ def process(ctx, input_file):
 def clean(ctx, input_file):
     """Filler removal only (no enhancement)."""
     ctx.obj["enhance"] = False
+    ctx.obj["max_gap"] = 0
+    ctx.obj["remove_retakes"] = False
     ctx.invoke(process, input_file=input_file)
 
 
@@ -1537,8 +1565,7 @@ def detect_cmd(ctx, input_file):
         min_confidence=opts["min_confidence"],
         margin_ms=opts["margin"],
     )
-    gap_cuts = detect_gaps(transcript, max_gap_ms=opts["max_gap"]) if opts["max_gap"] > 0 else []
-    cuts = merge_cuts(sorted(filler_cuts + gap_cuts, key=lambda c: c.start), margin_ms=0)
+    cuts = merge_cuts(filler_cuts, margin_ms=0)
 
     if opts.get("export_fmt"):
         keeps_for_export = invert_cuts(cuts, duration)
@@ -1720,34 +1747,74 @@ def do_export(fmt: str, cuts: list[CutRegion], keeps: list[KeepRegion],
 # ── Config Subcommand ──────────────────────────────────────
 
 CONFIG_FILE = CONFIG_DIR / "config.json"
+CONFIG_KEY_ALIASES = {
+    "margin_ms": "margin",
+    "max_gap_ms": "max_gap",
+}
 
 DEFAULT_CONFIG = {
-    "version": 1,
+    "version": 2,
     "defaults": {
         "preset": "victor",
-        "margin_ms": 120,
-        "max_gap_ms": 300,
+        "margin": 120,
+        "max_gap": 300,
         "min_confidence": 0.5,
         "enhance": False,
         "cpu": False,
+        "remove_retakes": True,
     }
 }
+
+
+def default_config() -> dict:
+    """Return a fresh copy of the default config."""
+    return {"version": DEFAULT_CONFIG["version"], "defaults": DEFAULT_CONFIG["defaults"].copy()}
+
+
+def normalize_config(config: dict | None) -> dict:
+    """Normalize config structure and migrate legacy keys."""
+    normalized = default_config()
+    if not config:
+        return normalized
+
+    defaults = dict(config.get("defaults", {}))
+    for legacy_key, canonical_key in CONFIG_KEY_ALIASES.items():
+        if legacy_key in defaults and canonical_key not in defaults:
+            defaults[canonical_key] = defaults.pop(legacy_key)
+
+    normalized["version"] = max(int(config.get("version", 0) or 0), DEFAULT_CONFIG["version"])
+    normalized["defaults"].update(defaults)
+    return normalized
 
 
 def load_config() -> dict:
     """Load config.json, falling back to defaults."""
     if CONFIG_FILE.exists():
         try:
-            return json.loads(CONFIG_FILE.read_text())
+            return normalize_config(json.loads(CONFIG_FILE.read_text()))
         except (json.JSONDecodeError, KeyError):
-            return DEFAULT_CONFIG.copy()
-    return DEFAULT_CONFIG.copy()
+            return default_config()
+    return default_config()
 
 
 def save_config(config: dict):
     """Write config.json."""
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(config, indent=2) + "\n")
+    CONFIG_FILE.write_text(json.dumps(normalize_config(config), indent=2) + "\n")
+
+
+def resolve_config_defaults(ctx: click.Context, option_values: dict) -> dict:
+    """Apply saved config defaults only when an option wasn't set on the CLI."""
+    saved_defaults = load_config().get("defaults", {})
+    resolved = option_values.copy()
+
+    for key in DEFAULT_CONFIG["defaults"]:
+        if key not in resolved:
+            continue
+        if ctx.get_parameter_source(key) == ParameterSource.DEFAULT:
+            resolved[key] = saved_defaults.get(key, resolved[key])
+
+    return resolved
 
 
 @cli.group()
@@ -1761,6 +1828,13 @@ def config_show():
     """Display current configuration."""
     cfg = load_config()
     defaults = cfg.get("defaults", {})
+    saved_keys = set()
+    if CONFIG_FILE.exists():
+        try:
+            raw_defaults = json.loads(CONFIG_FILE.read_text()).get("defaults", {})
+            saved_keys = {CONFIG_KEY_ALIASES.get(key, key) for key in raw_defaults}
+        except (json.JSONDecodeError, AttributeError):
+            saved_keys = set()
 
     if IS_TTY:
         table = Table(
@@ -1776,7 +1850,7 @@ def config_show():
 
         for key, default_val in DEFAULT_CONFIG["defaults"].items():
             val = defaults.get(key, default_val)
-            source = "config" if CONFIG_FILE.exists() and key in defaults else "default"
+            source = "config" if key in saved_keys else "default"
             table.add_row(key, str(val), source)
 
         console.print()
@@ -1797,6 +1871,7 @@ def config_set(key, value):
     """Set a configuration value."""
     cfg = load_config()
     defaults = cfg.setdefault("defaults", {})
+    key = CONFIG_KEY_ALIASES.get(key, key)
 
     if key not in DEFAULT_CONFIG["defaults"]:
         raise click.ClickException(f"Unknown setting: {key}. Available: {', '.join(DEFAULT_CONFIG['defaults'].keys())}")
