@@ -1,6 +1,6 @@
 # Local video filler word removal: declip
 
-Declip plans local video cuts for creators and editing teams. Use its filler and gap heuristics to review talking-head edits before processing media.
+`declip` plans local video cuts for creators and editing teams. Use its filler and gap heuristics to review talking-head edits before processing media.
 
 [Project page](https://scalewithsearch.com/code/declip)
 
@@ -24,6 +24,20 @@ This installs the portable test environment. Full processing requires Apple Sili
 .venv/bin/python -m pytest -q
 ```
 
+## Usage
+
+Put options before the subcommand. A run without `--execute` is a dry run.
+
+```bash
+./declip process video.mp4
+./declip --execute process video.mp4
+./declip --max-gap 500 --execute process video.mp4
+./declip detect video.mp4
+./declip transcribe video.mp4
+```
+
+The script header runs through `uv`, which resolves the full runtime on first use.
+
 ## How it works
 
 - Transcribe media with MLX Whisper when the full runtime is installed.
@@ -32,7 +46,7 @@ This installs the portable test environment. Full processing requires Apple Sili
 
 ## Limits
 
-- The full runtime remains held for dependency review; see SECURITY.md and security/dependency-audit.json.
+- The full runtime has open dependency advisories. See [SECURITY.md](SECURITY.md) and [the dependency scan](security/dependency-audit.json).
 - Portable tests cover cut calculations without downloading transcription weights.
 - Filler and retake detection are heuristic.
 - The current filler detector does not enforce its minimum-confidence argument.

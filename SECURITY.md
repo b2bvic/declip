@@ -9,10 +9,10 @@ Tests use synthetic records and mocked external services.
 Review file output and API write commands before execution.
 Dependency updates require review and passing checks.
 
-## Runtime dependency hold
+## Runtime dependency advisories
 
 The 2026.10.05 runtime scan reported advisory records in five packages.
 The legacy enhancement dependency pins prevent a routine upgrade of that graph.
-This branch remains held for dependency review.
+Review these advisories before you install the full runtime.
 See [the dependency scan](security/dependency-audit.json) for package versions, advisory IDs, and scan limits.
 The portable unit-test environment does not install the enhancement dependency graph.
