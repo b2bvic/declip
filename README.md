@@ -1,109 +1,57 @@
-# declip
+# Local video filler word removal: declip
 
-Local filler removal for talking-head video. No cloud, no subscription, no upload. Runs on Apple Silicon.
+Declip plans local video cuts for creators and editing teams. Use its filler and gap heuristics to review talking-head edits before processing media.
 
-Part of a larger system: this repository proves **P10 (production means persistence, bounded autonomy, and observability)** and **P15 (perspective becomes products)** from the [Seventeen Principles](https://victorvalentineromo.com/principles).
-
-Replaces Descript's filler word removal + Studio Sound with a single Python script using Whisper (MLX) and ffmpeg.
-
-## What it does
-
-- Detects and removes filler words (um, uh, like, you know, basically, etc.)
-- Compresses dead air gaps to a configurable maximum
-- Detects retakes (repeated lines) and keeps the latest take
-- Applies voice EQ presets matched to your mic profile
-- Optional neural speech enhancement via Resemble Enhance
-- Frame-accurate cuts with 15ms audio fades at every boundary
-- Dry-run mode shows exactly what will be cut before processing
+[Project page](https://scalewithsearch.com/code/declip)
 
 ## Install
 
-Requirements: macOS with Apple Silicon, Python 3.11+, ffmpeg with VideoToolbox.
+Requirements: Python 3.11 or later.
 
 ```bash
-# Install uv if you don't have it
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Download declip
-curl -o ~/.local/bin/declip https://raw.githubusercontent.com/b2bvic/declip/main/declip
-chmod +x ~/.local/bin/declip
+gh repo clone b2bvic/declip
+cd declip
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-dev.txt
 ```
 
-That's it. Dependencies (mlx-whisper, click) are resolved automatically by `uv` on first run.
+This installs the portable test environment. Full processing requires Apple Silicon, uv, ffmpeg, and the declared runtime dependencies.
 
-## Usage
+## Quick start
 
 ```bash
-# Dry-run: see what would be cut (default)
-declip process video.mp4
-
-# Execute: process the video
-declip process video.mp4 --execute
-
-# Compress gaps longer than 500ms
-declip process video.mp4 --max-gap 500 --execute
-
-# Cut a specific range (e.g. off-topic conversation)
-declip process video.mp4 --cut-range "570.5-695.9" --execute
-
-# Use a different EQ preset
-declip process video.mp4 --preset podcast --execute
-
-# Just detect fillers (report only)
-declip detect video.mp4
-
-# Just transcribe
-declip transcribe video.mp4
-```
-
-## EQ Presets
-
-Presets live in `~/.config/declip/presets.json`. Ships with:
-
-| Preset | Description |
-|--------|-------------|
-| `victor` | DJI Mic lav matched to Descript Studio Sound. Bass restore, presence lift, tight dynamics. |
-| `natural` | Transparent. EQ only, no compression. |
-| `podcast` | Broadcast standard, -16 LUFS, moderate compression. |
-| `raw` | Loudness normalization only. |
-| `none` | Pass-through. |
-
-Create your own by adding entries to the JSON file.
-
-## Options
-
-```
---execute            Actually process (default is dry-run)
---preset, -p         EQ preset (default: victor)
---max-gap            Compress word gaps longer than N ms (default: 300, 0=off)
---cut-range          Manual cut range as start-end seconds (repeatable)
---margin             Safety margin around cuts in ms (default: 120)
---enhance            Enable Resemble Enhance neural denoising (off by default)
---cpu                Force CPU for Resemble Enhance (avoids MPS memory crashes)
---model              Whisper model (default: mlx-community/whisper-large-v3-turbo)
---min-confidence     Whisper confidence threshold (default: 0.5)
---output, -o         Output path (default: input_clean.mp4)
---verbose, -v        Verbose ffmpeg output
---json-output        Machine-readable JSON report
---keep-transcript    Save transcript JSON alongside output
+.venv/bin/python declip --help
+.venv/bin/python -m pytest -q
 ```
 
 ## How it works
 
-1. **Transcribe** — Whisper large-v3-turbo on Metal GPU via MLX. Word-level timestamps.
-2. **Detect** — Pattern matching against filler word list with context-sensitive rules (e.g. "like" kept when semantic, "so" kept mid-sentence).
-3. **Compress gaps** — Gaps exceeding threshold trimmed from the midpoint, preserving natural breath timing.
-4. **Retake detection** — Sentence-level similarity comparison within a sliding window. Earlier takes get cut, latest kept.
-5. **Cluster merge** — Adjacent cuts with < 200ms speech between them collapse into a single cut (prevents machine-gun jump cuts).
-6. **Extract** — Frame-accurate segment extraction via ffmpeg filtergraph with 15ms audio fades.
-7. **EQ** — Apply preset chain (highpass, bass, presence, compression, loudnorm).
+- Transcribe media with MLX Whisper when the full runtime is installed.
+- Build cut regions from filler, gap, retake, and manual-range rules.
+- Use ffmpeg for requested processing.
 
-Transcripts are cached by file hash. Re-runs skip transcription.
+## Limits
+
+- The full runtime remains held for dependency review; see SECURITY.md and security/dependency-audit.json.
+- Portable tests cover cut calculations without downloading transcription weights.
+- Filler and retake detection are heuristic.
+- The current filler detector does not enforce its minimum-confidence argument.
+
+## Related repositories
+
+- [web2md](https://github.com/b2bvic/web2md)
+- [twitter-bookmarks](https://github.com/b2bvic/twitter-bookmarks)
+- [sws-skills](https://github.com/b2bvic/sws-skills)
+
+## Development
+
+```bash
+.venv/bin/python -m pytest -q
+.venv/bin/python -m ruff check --select E9,F63,F7,F82 declip tests
+```
+
+CI runs the portable tests and checks syntax-related Python lint rules.
 
 ## License
 
-MIT
-
-## How this was built
-
-Specification and judgment: human. Implementation: AI models executing that specification under a build contract, with an adversarial audit before publish. The division of labor is the point; see [P07](https://victorvalentineromo.com/principles).
+MIT. See [LICENSE](LICENSE).
