@@ -1,137 +1,56 @@
 {
-  "checked_at": "2026.10.05",
-  "tool": "pip-audit 2.10.1",
-  "scope": "uv-resolved Python 3.11 runtime dependencies, including resemble-enhance",
-  "command": "python -m pip_audit -r runtime-requirements.txt --no-deps --disable-pip --format json",
-  "exit_code": 1,
-  "advisory_records": 145,
-  "unique_ids": 85,
-  "packages": [
+  "checked_at": "2026-10-06T17:16:28.078069+00:00",
+  "scope": "Python 3.11 runtime extras for macOS arm64 and Linux x86_64",
+  "input_sha256": "56641afa4cd958a8a3bec8cf43a3b8f6f7f31ea880144766c777ce31b102cd6b",
+  "macos_deployment_targets": {
+    "cpu": "13.0",
+    "mac": "14.0"
+  },
+  "receipts": [
     {
-      "name": "deepspeed",
-      "version": "0.12.4",
-      "advisory_records": 2,
-      "unique_advisory_ids": [
-        "PYSEC-2024-109"
-      ]
+      "extra": "cpu",
+      "platform": "macos",
+      "path": "audit/cpu-macos.json",
+      "release_verdict": "clean",
+      "checked_at": "2026-10-06T17:16:26.096179+00:00",
+      "advisory_records": 0,
+      "scan_error": null
     },
     {
-      "name": "gradio",
-      "version": "4.8.0",
-      "advisory_records": 80,
-      "unique_advisory_ids": [
-        "GHSA-26jh-r8g2-6fpr",
-        "PYSEC-2023-249",
-        "PYSEC-2023-255",
-        "PYSEC-2024-184",
-        "PYSEC-2024-196",
-        "PYSEC-2024-197",
-        "PYSEC-2024-198",
-        "PYSEC-2024-199",
-        "PYSEC-2024-213",
-        "PYSEC-2024-214",
-        "PYSEC-2024-215",
-        "PYSEC-2024-216",
-        "PYSEC-2024-217",
-        "PYSEC-2024-218",
-        "PYSEC-2024-219",
-        "PYSEC-2024-220",
-        "PYSEC-2024-255",
-        "PYSEC-2024-261",
-        "PYSEC-2024-274",
-        "PYSEC-2024-321",
-        "PYSEC-2025-118",
-        "PYSEC-2025-119",
-        "PYSEC-2026-1407",
-        "PYSEC-2026-1408",
-        "PYSEC-2026-1409",
-        "PYSEC-2026-1410",
-        "PYSEC-2026-1411",
-        "PYSEC-2026-1412",
-        "PYSEC-2026-1413",
-        "PYSEC-2026-1414",
-        "PYSEC-2026-1415",
-        "PYSEC-2026-1416",
-        "PYSEC-2026-1417",
-        "PYSEC-2026-1418",
-        "PYSEC-2026-1419",
-        "PYSEC-2026-1420",
-        "PYSEC-2026-211",
-        "PYSEC-2026-2178",
-        "PYSEC-2026-2179",
-        "PYSEC-2026-345",
-        "PYSEC-2026-64",
-        "PYSEC-2026-65",
-        "PYSEC-2026-66"
-      ]
+      "extra": "cpu",
+      "platform": "linux",
+      "path": "audit/cpu-linux.json",
+      "release_verdict": "clean",
+      "checked_at": "2026-10-06T17:16:26.666024+00:00",
+      "advisory_records": 0,
+      "scan_error": null
     },
     {
-      "name": "pillow",
-      "version": "10.4.0",
-      "advisory_records": 33,
-      "unique_advisory_ids": [
-        "PYSEC-2026-165",
-        "PYSEC-2026-2249",
-        "PYSEC-2026-2250",
-        "PYSEC-2026-2252",
-        "PYSEC-2026-2253",
-        "PYSEC-2026-2254",
-        "PYSEC-2026-2255",
-        "PYSEC-2026-2256",
-        "PYSEC-2026-2257",
-        "PYSEC-2026-2874",
-        "PYSEC-2026-3451",
-        "PYSEC-2026-3453",
-        "PYSEC-2026-3454",
-        "PYSEC-2026-3493",
-        "PYSEC-2026-3494",
-        "PYSEC-2026-3495",
-        "PYSEC-2026-3496"
-      ]
+      "extra": "cuda",
+      "platform": "linux",
+      "path": "audit/cuda-linux.json",
+      "release_verdict": "clean",
+      "checked_at": "2026-10-06T17:16:27.158040+00:00",
+      "advisory_records": 0,
+      "scan_error": null
     },
     {
-      "name": "torch",
-      "version": "2.1.1",
-      "advisory_records": 28,
-      "unique_advisory_ids": [
-        "PYSEC-2024-250",
-        "PYSEC-2024-251",
-        "PYSEC-2024-252",
-        "PYSEC-2024-259",
-        "PYSEC-2025-189",
-        "PYSEC-2025-190",
-        "PYSEC-2025-191",
-        "PYSEC-2025-192",
-        "PYSEC-2025-193",
-        "PYSEC-2025-194",
-        "PYSEC-2025-195",
-        "PYSEC-2025-198",
-        "PYSEC-2025-203",
-        "PYSEC-2025-204",
-        "PYSEC-2025-205",
-        "PYSEC-2025-206",
-        "PYSEC-2025-207",
-        "PYSEC-2025-208",
-        "PYSEC-2025-209",
-        "PYSEC-2025-41",
-        "PYSEC-2026-139",
-        "PYSEC-2026-1970",
-        "PYSEC-2026-2286"
-      ]
-    },
-    {
-      "name": "tqdm",
-      "version": "4.66.1",
-      "advisory_records": 2,
-      "unique_advisory_ids": [
-        "PYSEC-2026-1976"
-      ]
+      "extra": "mac",
+      "platform": "macos",
+      "path": "audit/mac-macos.json",
+      "release_verdict": "clean",
+      "checked_at": "2026-10-06T17:16:27.632967+00:00",
+      "advisory_records": 0,
+      "scan_error": null
     }
   ],
-  "release_verdict": "held",
+  "release_verdict": "clean",
   "limits": [
-    "Advisory records include duplicate IDs.",
-    "This scan does not prove exploitability in a local CLI.",
-    "Portable unit-test dependencies are a separate environment."
+    "Windows is deferred and has no audit in 0.5.0.",
+    "Requirements are resolved from pyproject.toml, not exported from uv.lock.",
+    "The mac extra targets macOS 14.0, matching the minimum of the locked MLX and Torch wheels.",
+    "The cpu extra targets macOS 13.0; Linux targets x86_64 glibc.",
+    "Cross-platform resolution does not prove native installation or hardware support.",
+    "A clean scan means no known advisory in the scanned versions at the recorded time."
   ]
 }

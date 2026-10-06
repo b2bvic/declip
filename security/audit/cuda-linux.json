@@ -1,0 +1,304 @@
+{
+  "checked_at": "2026-10-06T17:16:27.158040+00:00",
+  "tool": "pip-audit 2.10.1",
+  "scope": "Resolved runtime dependencies from pyproject.toml",
+  "command": "pip-audit --no-deps --disable-pip -r /var/folders/rq/488bw2v110bgbyn4plq2k65h0000gn/T/declip-p11-acceptance-committed-sfxlnva_/declip-audit-3u78erel/requirements.txt --format json",
+  "exit_code": 0,
+  "advisory_records": 0,
+  "unique_ids": 0,
+  "packages": [
+    {
+      "name": "anyio",
+      "version": "4.15.1",
+      "vulns": []
+    },
+    {
+      "name": "av",
+      "version": "18.1.0",
+      "vulns": []
+    },
+    {
+      "name": "certifi",
+      "version": "2026.7.22",
+      "vulns": []
+    },
+    {
+      "name": "click",
+      "version": "8.5.0",
+      "vulns": []
+    },
+    {
+      "name": "ctranslate2",
+      "version": "4.8.2",
+      "vulns": []
+    },
+    {
+      "name": "faster-whisper",
+      "version": "1.2.1",
+      "vulns": []
+    },
+    {
+      "name": "filelock",
+      "version": "4.0.12",
+      "vulns": []
+    },
+    {
+      "name": "flatbuffers",
+      "version": "25.12.19",
+      "vulns": []
+    },
+    {
+      "name": "fsspec",
+      "version": "2026.9.0",
+      "vulns": []
+    },
+    {
+      "name": "h11",
+      "version": "0.16.0",
+      "vulns": []
+    },
+    {
+      "name": "hf-xet",
+      "version": "1.6.0",
+      "vulns": []
+    },
+    {
+      "name": "httpcore",
+      "version": "1.0.9",
+      "vulns": []
+    },
+    {
+      "name": "httpx",
+      "version": "0.28.1",
+      "vulns": []
+    },
+    {
+      "name": "huggingface-hub",
+      "version": "1.33.0",
+      "vulns": []
+    },
+    {
+      "name": "idna",
+      "version": "3.20",
+      "vulns": []
+    },
+    {
+      "name": "markdown-it-py",
+      "version": "4.2.0",
+      "vulns": []
+    },
+    {
+      "name": "mdurl",
+      "version": "0.1.2",
+      "vulns": []
+    },
+    {
+      "name": "numpy",
+      "version": "2.4.6",
+      "vulns": []
+    },
+    {
+      "name": "nvidia-cublas-cu12",
+      "version": "12.9.2.10",
+      "vulns": []
+    },
+    {
+      "name": "nvidia-cuda-nvrtc-cu12",
+      "version": "12.9.86",
+      "vulns": []
+    },
+    {
+      "name": "nvidia-cudnn-cu12",
+      "version": "9.27.0.42",
+      "vulns": []
+    },
+    {
+      "name": "onnxruntime",
+      "version": "1.30.0",
+      "vulns": []
+    },
+    {
+      "name": "packaging",
+      "version": "26.3",
+      "vulns": []
+    },
+    {
+      "name": "platformdirs",
+      "version": "4.12.3",
+      "vulns": []
+    },
+    {
+      "name": "protobuf",
+      "version": "7.36.2",
+      "vulns": []
+    },
+    {
+      "name": "pygments",
+      "version": "2.21.0",
+      "vulns": []
+    },
+    {
+      "name": "pyyaml",
+      "version": "6.0.3",
+      "vulns": []
+    },
+    {
+      "name": "rich",
+      "version": "15.0.0",
+      "vulns": []
+    },
+    {
+      "name": "tokenizers",
+      "version": "0.23.2",
+      "vulns": []
+    },
+    {
+      "name": "tqdm",
+      "version": "4.70.1",
+      "vulns": []
+    },
+    {
+      "name": "typing-extensions",
+      "version": "4.16.0",
+      "vulns": []
+    }
+  ],
+  "extra": "cuda",
+  "platform": "linux",
+  "python": "3.11",
+  "target": "x86_64-unknown-linux-gnu",
+  "resolved": [
+    {
+      "name": "anyio",
+      "version": "4.15.1"
+    },
+    {
+      "name": "av",
+      "version": "18.1.0"
+    },
+    {
+      "name": "certifi",
+      "version": "2026.7.22"
+    },
+    {
+      "name": "click",
+      "version": "8.5.0"
+    },
+    {
+      "name": "ctranslate2",
+      "version": "4.8.2"
+    },
+    {
+      "name": "faster-whisper",
+      "version": "1.2.1"
+    },
+    {
+      "name": "filelock",
+      "version": "4.0.12"
+    },
+    {
+      "name": "flatbuffers",
+      "version": "25.12.19"
+    },
+    {
+      "name": "fsspec",
+      "version": "2026.9.0"
+    },
+    {
+      "name": "h11",
+      "version": "0.16.0"
+    },
+    {
+      "name": "hf-xet",
+      "version": "1.6.0"
+    },
+    {
+      "name": "httpcore",
+      "version": "1.0.9"
+    },
+    {
+      "name": "httpx",
+      "version": "0.28.1"
+    },
+    {
+      "name": "huggingface-hub",
+      "version": "1.33.0"
+    },
+    {
+      "name": "idna",
+      "version": "3.20"
+    },
+    {
+      "name": "markdown-it-py",
+      "version": "4.2.0"
+    },
+    {
+      "name": "mdurl",
+      "version": "0.1.2"
+    },
+    {
+      "name": "numpy",
+      "version": "2.4.6"
+    },
+    {
+      "name": "nvidia-cublas-cu12",
+      "version": "12.9.2.10"
+    },
+    {
+      "name": "nvidia-cuda-nvrtc-cu12",
+      "version": "12.9.86"
+    },
+    {
+      "name": "nvidia-cudnn-cu12",
+      "version": "9.27.0.42"
+    },
+    {
+      "name": "onnxruntime",
+      "version": "1.30.0"
+    },
+    {
+      "name": "packaging",
+      "version": "26.3"
+    },
+    {
+      "name": "platformdirs",
+      "version": "4.12.3"
+    },
+    {
+      "name": "protobuf",
+      "version": "7.36.2"
+    },
+    {
+      "name": "pygments",
+      "version": "2.21.0"
+    },
+    {
+      "name": "pyyaml",
+      "version": "6.0.3"
+    },
+    {
+      "name": "rich",
+      "version": "15.0.0"
+    },
+    {
+      "name": "tokenizers",
+      "version": "0.23.2"
+    },
+    {
+      "name": "tqdm",
+      "version": "4.70.1"
+    },
+    {
+      "name": "typing-extensions",
+      "version": "4.16.0"
+    }
+  ],
+  "scan_error": null,
+  "release_verdict": "clean",
+  "input_sha256": "56641afa4cd958a8a3bec8cf43a3b8f6f7f31ea880144766c777ce31b102cd6b",
+  "macos_deployment_target": null,
+  "resolve_command": "uv pip compile pyproject.toml --extra cuda --python-version 3.11 --python-platform x86_64-unknown-linux-gnu -o /var/folders/rq/488bw2v110bgbyn4plq2k65h0000gn/T/declip-p11-acceptance-committed-sfxlnva_/declip-audit-3u78erel/requirements.txt",
+  "resolve_stderr": "Resolved 31 packages in 4ms\n",
+  "stdout": "{\"dependencies\": [{\"name\": \"anyio\", \"version\": \"4.15.1\", \"vulns\": []}, {\"name\": \"av\", \"version\": \"18.1.0\", \"vulns\": []}, {\"name\": \"certifi\", \"version\": \"2026.7.22\", \"vulns\": []}, {\"name\": \"click\", \"version\": \"8.5.0\", \"vulns\": []}, {\"name\": \"ctranslate2\", \"version\": \"4.8.2\", \"vulns\": []}, {\"name\": \"faster-whisper\", \"version\": \"1.2.1\", \"vulns\": []}, {\"name\": \"filelock\", \"version\": \"4.0.12\", \"vulns\": []}, {\"name\": \"flatbuffers\", \"version\": \"25.12.19\", \"vulns\": []}, {\"name\": \"fsspec\", \"version\": \"2026.9.0\", \"vulns\": []}, {\"name\": \"h11\", \"version\": \"0.16.0\", \"vulns\": []}, {\"name\": \"hf-xet\", \"version\": \"1.6.0\", \"vulns\": []}, {\"name\": \"httpcore\", \"version\": \"1.0.9\", \"vulns\": []}, {\"name\": \"httpx\", \"version\": \"0.28.1\", \"vulns\": []}, {\"name\": \"huggingface-hub\", \"version\": \"1.33.0\", \"vulns\": []}, {\"name\": \"idna\", \"version\": \"3.20\", \"vulns\": []}, {\"name\": \"markdown-it-py\", \"version\": \"4.2.0\", \"vulns\": []}, {\"name\": \"mdurl\", \"version\": \"0.1.2\", \"vulns\": []}, {\"name\": \"numpy\", \"version\": \"2.4.6\", \"vulns\": []}, {\"name\": \"nvidia-cublas-cu12\", \"version\": \"12.9.2.10\", \"vulns\": []}, {\"name\": \"nvidia-cuda-nvrtc-cu12\", \"version\": \"12.9.86\", \"vulns\": []}, {\"name\": \"nvidia-cudnn-cu12\", \"version\": \"9.27.0.42\", \"vulns\": []}, {\"name\": \"onnxruntime\", \"version\": \"1.30.0\", \"vulns\": []}, {\"name\": \"packaging\", \"version\": \"26.3\", \"vulns\": []}, {\"name\": \"platformdirs\", \"version\": \"4.12.3\", \"vulns\": []}, {\"name\": \"protobuf\", \"version\": \"7.36.2\", \"vulns\": []}, {\"name\": \"pygments\", \"version\": \"2.21.0\", \"vulns\": []}, {\"name\": \"pyyaml\", \"version\": \"6.0.3\", \"vulns\": []}, {\"name\": \"rich\", \"version\": \"15.0.0\", \"vulns\": []}, {\"name\": \"tokenizers\", \"version\": \"0.23.2\", \"vulns\": []}, {\"name\": \"tqdm\", \"version\": \"4.70.1\", \"vulns\": []}, {\"name\": \"typing-extensions\", \"version\": \"4.16.0\", \"vulns\": []}], \"fixes\": []}\n",
+  "stderr": "WARNING:pip_audit._cli:--no-deps is supported, but users are encouraged to fully hash their pinned dependencies\nWARNING:pip_audit._cli:Consider using a tool like `pip-compile`: https://pip-tools.readthedocs.io/en/latest/#using-hashes\nNo known vulnerabilities found\n"
+}
