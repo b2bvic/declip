@@ -198,6 +198,8 @@ def validation_errors(receipt: dict) -> list[str]:
             errors.append("10-bit probe must have Main 10 profile")
         if probe.get("encoder") != expected_encoder:
             errors.append(f"{key} used the wrong encoder")
+        if not finite(probe.get("duration_error_frames"), 0, 1):
+            errors.append(f"{key} output duration differs by more than one frame")
     if not finite(receipt["av_sync_max_offset_frames"], 0, 1):
         errors.append("A/V sync exceeds one frame or was not measured")
     sync = receipt["av_sync_probe"]
@@ -423,7 +425,7 @@ def sync_probe(folder, options, caps):
 
 def smoke(clip: Path, manifest_path: Path, requested: str) -> dict:
     info = hardware.detect()
-    receipt = dict.fromkeys(REQUIRED)
+    receipt = dict.fromkeys(sorted(REQUIRED))
     receipt.update(
         declip_version=__version__,
         git_commit=run(["git", "rev-parse", "HEAD"]).strip(),
@@ -439,6 +441,26 @@ def smoke(clip: Path, manifest_path: Path, requested: str) -> dict:
         checked_at=datetime.now(timezone.utc).isoformat(),
         scope="synthetic speech and generated render fixtures; no user-media decisions",
     )
+    if info.os == "darwin":
+        try:
+            displays = json.loads(
+                run(["system_profiler", "SPDisplaysDataType", "-json"], timeout=5)
+            )["SPDisplaysDataType"]
+            receipt["gpu"] = [
+                g["sppci_model"] for g in displays if g.get("sppci_model")
+            ]
+            receipt["metal_gpu_family"] = [
+                g["spdisplays_mtlgpufamilysupport"]
+                for g in displays
+                if g.get("spdisplays_mtlgpufamilysupport")
+            ]
+            receipt["driver_note"] = (
+                "Apple GPU driver supplied by macOS; no separate driver version reported"
+            )
+        except (DeclipError, OSError, ValueError, KeyError, subprocess.SubprocessError):
+            receipt["driver_note"] = (
+                "Apple GPU metadata unavailable; NVIDIA driver list is empty"
+            )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if receipt["clip_sha256"] != manifest["clip_sha256"]:
         raise DeclipError("clip SHA-256 differs from manifest")
