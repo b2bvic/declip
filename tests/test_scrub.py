@@ -1,4 +1,4 @@
-"""P0 scrub scope. P11 adds documentation and workflow scope."""
+"""Check source, tests, documentation, scripts, and workflows for private settings."""
 
 import re
 from pathlib import Path
@@ -26,8 +26,17 @@ ATTRIBUTION_LINES = (
 
 
 def test_personal_settings_are_absent():
-    paths = [ROOT / "pyproject.toml"]
-    for directory in ("src", "tests"):
+    paths = [
+        ROOT / name
+        for name in (
+            "pyproject.toml",
+            "README.md",
+            "CHANGELOG.md",
+            "CONTRIBUTING.md",
+            "SECURITY.md",
+        )
+    ]
+    for directory in ("src", "tests", "docs", ".github", "scripts"):
         paths.extend(
             path
             for path in (ROOT / directory).rglob("*")
@@ -41,7 +50,17 @@ def test_personal_settings_are_absent():
             (SOURCE_EXTRA,) if path.is_relative_to(ROOT / "src") else ()
         )
         for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if any(pattern.search(line) for pattern in patterns):
+            if path == ROOT / "README.md" and line.rstrip() in ATTRIBUTION_LINES:
+                continue
+            active = tuple(
+                pattern
+                for pattern in patterns
+                if not (
+                    path.is_relative_to(ROOT / "docs" / "receipts")
+                    and pattern.pattern == "m4 pro"
+                )
+            )
+            if any(pattern.search(line) for pattern in active):
                 failures.append(f"{path.relative_to(ROOT)}:{number}: {line}")
     assert not failures, "\n".join(failures)
 

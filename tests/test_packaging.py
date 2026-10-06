@@ -35,5 +35,9 @@ def test_wheel_contains_package_resources(tmp_path):
             "declip/review/static/app.js",
             "declip/review/static/style.css",
         } <= set(wheel.namelist())
+        for name in ("index.html", "app.js", "style.css"):
+            member = f"declip/review/static/{name}"
+            assert wheel.read(member) == (ROOT / "src" / member).read_bytes()
+            assert len(wheel.read(member)) > 100
         entry_points = wheel.read("declip-0.5.0.dist-info/entry_points.txt").decode()
         assert "declip = declip.cli:main" in entry_points
