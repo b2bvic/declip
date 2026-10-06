@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE fcpxml>
+<fcpxml version="1.10">
+  <resources>
+    <format id="r1" frameDuration="1001/30000s" width="160" height="90" />
+    <asset id="r2" name="sample.mp4" start="0/1s" duration="1001/50s" hasVideo="1" hasAudio="1" format="r1" audioSources="1" audioChannels="2" audioRate="48000">
+      <media-rep kind="original-media" src="file:///synthetic/sample.mp4" />
+    </asset>
+  </resources>
+  <library>
+    <event name="declip">
+      <project name="sample">
+        <sequence format="r1" duration="2002/125s" tcStart="0/1s" tcFormat="DF">
+          <spine>
+            <asset-clip ref="r2" name="sample.mp4" offset="0/1s" start="0/1s" duration="1001/500s" />
+            <asset-clip ref="r2" name="sample.mp4" offset="1001/500s" start="1001/250s" duration="3003/500s" />
+            <asset-clip ref="r2" name="sample.mp4" offset="1001/125s" start="3003/250s" duration="1001/125s" />
+          </spine>
+        </sequence>
+      </project>
+    </event>
+  </library>
+</fcpxml>
