@@ -1102,7 +1102,9 @@ def write_audit(record: dict):
 
 
 @click.group()
-@click.option("--execute", is_flag=True, help="Actually process (default is dry-run)")
+@click.option(
+    "--execute", is_flag=True, help="Request cut execution (unavailable in this build)"
+)
 @click.option(
     "--preset",
     "-p",
@@ -1115,7 +1117,7 @@ def write_audit(record: dict):
 @click.option(
     "--enhance/--no-enhance",
     default=False,
-    help="Toggle enhancement (off by default, use --enhance for noisy sources)",
+    help="Request audio enhancement (unavailable in this build)",
 )
 @click.option(
     "--margin", default=120, type=int, help="Safety margin around filler cuts (ms)"
@@ -1158,7 +1160,7 @@ def write_audit(record: dict):
     "export_fmt",
     type=click.Choice(["edl", "srt", "markers", "fcpxml"]),
     default=None,
-    help="Export cut list for NLE (edl, srt, markers, fcpxml)",
+    help="Request an NLE export (unavailable in this build)",
 )
 @click.pass_context
 def cli(
@@ -1181,17 +1183,18 @@ def cli(
     cpu,
     export_fmt,
 ):
-    """declip: filler removal and voice EQ.
+    """declip: preview filler cuts and manage voice EQ settings.
+
+    Cut execution, NLE export, and enhancement are unavailable in this build.
+    Options precede the subcommand.
 
     \b
     Usage:
-      declip process <file>            # Dry-run report
-      declip process <file> --execute  # Full pipeline
-      declip transcribe <file>         # Transcript only
-      declip detect <file>             # Filler report
-      declip clean <file> --execute    # Filler removal only
-      declip enhance <file> --execute  # audio enhancement only
-      declip config show               # View settings
+      declip process <file>     # Dry-run report
+      declip transcribe <file>  # Transcript only
+      declip detect <file>      # Filler report
+      declip clean <file>       # Filler report only
+      declip config show        # View settings
     """
     ctx.ensure_object(dict)
     option_values = {
@@ -1229,7 +1232,7 @@ def cli(
 @click.argument("input_file", type=click.Path(exists=True))
 @click.pass_context
 def process(ctx, input_file):
-    """Full pipeline: transcribe → detect → cut → enhance → EQ."""
+    """Preview filler, gap, and retake cuts."""
     opts = ctx.obj
     if opts.get("enhance"):
         raise DeclipError("enhancement is unavailable in this build")
@@ -1485,7 +1488,7 @@ def process(ctx, input_file):
 @click.argument("input_file", type=click.Path(exists=True))
 @click.pass_context
 def clean(ctx, input_file):
-    """Filler removal only (no enhancement)."""
+    """Preview filler cuts."""
     ctx.obj["enhance"] = False
     ctx.obj["max_gap"] = 0
     ctx.obj["remove_retakes"] = False
@@ -1496,7 +1499,7 @@ def clean(ctx, input_file):
 @click.argument("input_file", type=click.Path(exists=True))
 @click.pass_context
 def enhance_cmd(ctx, input_file):
-    """audio enhancement enhancement + EQ only (no filler removal)."""
+    """Audio enhancement is unavailable in this build."""
     raise DeclipError("enhancement is unavailable in this build")
 
 
