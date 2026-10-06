@@ -1,33 +1,89 @@
+from pathlib import Path
+
 from click.testing import CliRunner
 
+from declip import cli, detect, editlist
+from declip.contracts import FillerFile, Word
 
-def test_cut_merge_and_inverse_preserve_unedited_time(tool):
-    cuts = tool.merge_cuts(
-        [tool.CutRegion(1, 2, "um", 1), tool.CutRegion(1.5, 3, "uh", 1)], 0
+
+def test_cut_merge_and_inverse_preserve_unedited_time(tmp_path):
+    from declip.contracts import (
+        AudioStream,
+        ColorTags,
+        MediaInfo,
+        OutputMode,
+        OutputSpec,
+        Processing,
+        RigRef,
     )
-    assert [(cut.start, cut.end) for cut in cuts] == [(1, 3)]
-    keeps = tool.invert_cuts(cuts, 5)
-    assert [(keep.start, keep.end) for keep in keeps] == [(0, 1), (3, 5)]
+    from dataclasses import replace
+
+    info = MediaInfo(
+        5,
+        0,
+        "wav",
+        False,
+        None,
+        0,
+        None,
+        False,
+        None,
+        None,
+        0,
+        None,
+        None,
+        None,
+        None,
+        ColorTags(None, None, None, None),
+        None,
+        (AudioStream(0, "pcm", 48000, 1, "mono", 16, None),),
+        (),
+    )
+    source = tmp_path / "clip.wav"
+    source.touch()
+    document = editlist.new_edit_list(
+        source,
+        info,
+        "0" * 64,
+        transcript=None,
+        processing=Processing("none", 0.5, "", None, 0),
+        output=OutputSpec(OutputMode.RENDER, None, False),
+        rig=RigRef(None, None, {}),
+    )
+    from declip.contracts import Cut, CutKind, CutOrigin, CutStatus
+
+    cuts = tuple(
+        Cut(
+            str(i),
+            CutKind.MANUAL,
+            start,
+            end,
+            "manual",
+            1,
+            False,
+            None,
+            CutOrigin.MANUAL,
+            CutStatus.ACCEPTED,
+        )
+        for i, (start, end) in enumerate([(1, 2), (1.5, 3)])
+    )
+    assert editlist.keep_intervals(replace(document, cuts=cuts)) == [(0, 1), (3, 5)]
 
 
-def test_synthetic_filler_detection(tool):
-    transcript = {
-        "segments": [
-            {
-                "words": [
-                    {"word": "um", "start": 1, "end": 1.2, "probability": 1},
-                    {"word": "hello", "start": 1.3, "end": 2},
-                ]
-            }
-        ]
-    }
-    cuts = tool.detect_fillers(transcript, {"um"}, margin_ms=0)
-    assert len(cuts) == 1
-    assert cuts[0].word == "um"
+def test_synthetic_filler_detection():
+    words = (Word(0, 1, 1.2, "um", 1, 0), Word(1, 1.3, 2, "hello", 1, 0))
+    cuts = detect.detect_fillers(
+        words,
+        FillerFile("en", None, frozenset({"um"}), frozenset()),
+        min_confidence=0.5,
+        margin_ms=0,
+        duration=5,
+    )
+    assert len(cuts) == 1 and cuts[0].label == "um"
 
 
-def test_cli_help(tool):
-    result = CliRunner().invoke(tool.cli, ["--help"])
+def test_cli_help():
+    result = CliRunner().invoke(cli.cli, ["--help"])
     assert result.exit_code == 0, result.output
     assert "Usage:" in result.output
 
@@ -36,7 +92,6 @@ def _run_harness(tmp_path, source, *args):
     import shutil
     import subprocess
     import sys
-    from pathlib import Path
 
     shutil.copyfile(Path(__file__).with_name("conftest.py"), tmp_path / "conftest.py")
     test_file = tmp_path / "test_harness.py"
