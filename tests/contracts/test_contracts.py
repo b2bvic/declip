@@ -49,6 +49,7 @@ EXPECTED_FIELDS = {
         ("condition_on_previous_text", "bool"),
         ("device", "str"),
         ("compute_type", "str"),
+        ("quiet", "bool"),
     ],
     "CutProposal": [
         ("kind", "CutKind"),

@@ -9,6 +9,7 @@ import re
 import shutil
 import sys
 import tempfile
+from contextlib import nullcontext, redirect_stdout
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -227,20 +228,23 @@ def manual_ranges(values, info):
     return result
 
 
-def transcript_for(source, info, opts):
+def transcript_for(source, info, opts, *, json_out=False):
     if info.audio_index is None:
         raise DeclipError("Transcription requires an audio stream")
-    selection = transcribe.select(opts.transcribe.device, backend=opts.backend)
-    return transcribe.transcribe_file(
-        source,
-        opts.transcribe,
-        selection=selection,
-        cache_dir=paths.cache_dir(),
-        audio_index=info.audio_index,
-        fillers_for=lambda language: fillers.load_fillers(
-            language, config_dir=paths.config_dir()
-        ),
-    )
+    # Include lazy imports, language detection, and generator consumption. Backends
+    # without a verbosity option (and unexpected library prints) use stderr.
+    with redirect_stdout(sys.stderr) if json_out else nullcontext():
+        selection = transcribe.select(opts.transcribe.device, backend=opts.backend)
+        return transcribe.transcribe_file(
+            source,
+            replace(opts.transcribe, quiet=bool(json_out)),
+            selection=selection,
+            cache_dir=paths.cache_dir(),
+            audio_index=info.audio_index,
+            fillers_for=lambda language: fillers.load_fillers(
+                language, config_dir=paths.config_dir()
+            ),
+        )
 
 
 def make_plan(source, values):
@@ -281,7 +285,7 @@ def make_plan(source, values):
             f"Legacy edit list exists; run declip migrate {source.with_name(source.stem + '.edit.json')}"
         )
     transcript = (
-        transcript_for(source, info, opts)
+        transcript_for(source, info, opts, json_out=values.get("json_out"))
         if any(s in stages for s in ("fillers", "retakes"))
         else (previous.transcript if previous else None)
     )
@@ -455,7 +459,10 @@ def transcribe_command(ctx, file, **values):
 
     values = values_for(ctx, values)
     opts, _ = resolved(values)
-    emit(transcript_for(file.resolve(), probe_media(file), opts).to_dict())
+    # transcribe always emits JSON, even without an explicit --json flag.
+    emit(
+        transcript_for(file.resolve(), probe_media(file), opts, json_out=True).to_dict()
+    )
 
 
 @cli.command()

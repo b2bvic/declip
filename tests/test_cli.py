@@ -141,6 +141,110 @@ def test_plan_json_stdout_is_pure_json(runner, clip):
 
 @pytest.mark.ffmpeg
 @pytest.mark.parametrize(
+    "arguments",
+    [
+        ["review", "--no-browser"],
+        ["render"],
+        ["export", "--format", "markers"],
+        ["enhance"],
+        ["enhance", "--execute"],
+        ["migrate"],
+        ["doctor"],
+        ["setup", "--yes", "--name", "another"],
+        ["rig", "list"],
+        ["rig", "show", "default"],
+        ["rig", "rm", "default", "--force"],
+        ["config", "show"],
+        ["config", "set", "margin_ms", "80"],
+        ["config", "presets"],
+        ["config", "preset-add", "desk", "--chain", "highpass=f=70"],
+        ["config", "preset-rm", "desk"],
+        ["config", "fillers"],
+        ["config", "filler-add", "hmm"],
+        ["config", "filler-rm", "um"],
+    ],
+    ids=lambda args: "-".join(args[:2]),
+)
+def test_other_json_commands_do_not_call_transcriber(
+    runner,
+    clip,
+    arguments,
+    monkeypatch,
+):
+    from declip.contracts import RenderResult, ReviewResult
+    from declip.transcribe.fake import FakeTranscriber
+
+    invoke(runner, ["setup", "--yes", "--preset", "none"])
+    invoke(runner, ["config", "preset-add", "desk", "--chain", "highpass=f=70"])
+    path = planned(runner, clip)
+    document = editlist.load_edit_list(path)
+    document = editlist.apply_decisions(
+        document,
+        decisions={cut.id: CutStatus.REJECTED for cut in document.cuts},
+        add_manual=[],
+        remove_manual=[],
+    )
+    editlist.save_edit_list(
+        path, editlist.mark_review_passed(document, now=datetime.now(timezone.utc))
+    )
+    calls = []
+
+    def transcript(self, source, opts):
+        calls.append(source)
+        print("Detected language: English")
+        return document.transcript
+
+    monkeypatch.setattr(FakeTranscriber, "transcribe", transcript)
+    # Doctor probes availability only. Avoid loading Metal in the sandbox.
+    monkeypatch.setattr(module.transcribe, "get", lambda name: FakeTranscriber())
+    monkeypatch.setattr(module.proxy, "build_proxy", lambda *a: None)
+
+    def serve(path, preview, *, on_ready, **kwargs):
+        url = "http://127.0.0.1:12345/"
+        on_ready(url)
+        return ReviewResult(True, path, "test", 0, url)
+
+    monkeypatch.setattr(module.server, "serve", serve)
+    monkeypatch.setattr(
+        module.render,
+        "run_render_plan",
+        lambda plan, **k: RenderResult(
+            plan.output,
+            12,
+            None,
+            None,
+            None,
+            None,
+            1,
+            None,
+            "pcm_s16le",
+            0,
+        ),
+    )
+    args = list(arguments)
+    if args[0] in {"review", "render", "export", "enhance"}:
+        args.append(clip)
+    elif args[0] == "migrate":
+        from declip.media import file_hash
+
+        old = clip.with_suffix(".edit.json")
+        fixture = Path(__file__).parent / "fixtures/editlists/schema2_sample.json"
+        data = json.loads(fixture.read_text())
+        data["source"].update(
+            path=str(clip), sha256=file_hash(clip), duration_seconds=12
+        )
+        old.write_text(json.dumps(data))
+        args.extend([old, "--out", clip.with_name("migrated.json")])
+    result = invoke(runner, ["--json-output", *args])
+    assert isinstance(json.loads(result.stdout), dict)
+    _, end = json.JSONDecoder().raw_decode(result.stdout)
+    assert result.stdout[end:] == "\n"
+    assert "Detected language: English" not in result.stdout
+    assert calls == []
+
+
+@pytest.mark.ffmpeg
+@pytest.mark.parametrize(
     "value", ["2-1", "-1-2", "nan-2", "1-inf", "1-99", "1e999-2", "broken"]
 )
 def test_bad_cut_range(runner, clip, value):

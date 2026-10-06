@@ -5,7 +5,8 @@ import json
 import pytest
 from click.testing import CliRunner
 
-from declip import cli, media, transcribe
+from declip import cli, media
+from declip.transcribe.fake import FakeTranscriber
 from declip.contracts import AudioStream, ColorTags, MediaInfo, Transcript
 from declip.ui import Spinner, echo, progress_tick, ui_done, ui_warn
 
@@ -15,6 +16,15 @@ from declip.ui import Spinner, echo, progress_tick, ui_done, ui_warn
     [
         ["--json-output", "process"],
         ["--json-output", "detect"],
+        ["--json-output", "clean"],
+        ["--json-output", "plan"],
+        ["process", "--json", "--execute"],
+        ["clean", "--json", "--execute"],
+        ["process", "--json", "--export", "edl"],
+        ["clean", "--json", "--export", "edl"],
+        ["detect", "--json"],
+        ["plan", "--json"],
+        ["transcribe", "--json"],
         ["transcribe"],
     ],
 )
@@ -46,14 +56,21 @@ def test_cli_json_stdout_has_no_diagnostics(arguments, tmp_path, monkeypatch):
     monkeypatch.setenv("DECLIP_TRANSCRIBER", "fake")
     monkeypatch.setattr(cli.detect, "detect_waveform_gaps", lambda *args, **kwargs: [])
 
-    def transcript(*args, **kwargs):
+    def transcript(self, source, opts):
+        assert opts.quiet
+        print("Detected language: English")
         echo("transcription progress")
         return Transcript("fake", "fixture", "en", None, (), ())
 
-    monkeypatch.setattr(transcribe, "transcribe_file", transcript)
+    monkeypatch.setattr(FakeTranscriber, "transcribe", transcript)
     result = CliRunner().invoke(cli.cli, [*arguments, str(source)])
     assert result.exit_code == 0, result.output
     assert isinstance(json.loads(result.stdout), dict)
+    # raw_decode plus a whitespace-only tail proves exactly one JSON document.
+    _, end = json.JSONDecoder().raw_decode(result.stdout)
+    assert result.stdout[end:] == "\n"
+    assert "Detected language: English" not in result.stdout
+    assert result.stderr.count("Detected language: English") == 1
     assert "transcription progress" in result.stderr
     assert "\x1b" not in result.stdout + result.stderr
 
@@ -68,3 +85,45 @@ def test_ui_plain_stderr_and_no_color(capsys, monkeypatch):
     assert not captured.out
     assert "processing" in captured.err and "Warning: check" in captured.err
     assert "\x1b" not in captured.err
+
+
+@pytest.mark.parametrize("command", ["plan", "process", "clean", "detect"])
+def test_human_mode_keeps_backend_stdout(command, tmp_path, monkeypatch):
+    source = tmp_path / "clip.wav"
+    source.touch()
+    # Reuse the media shape without invoking a model or ffmpeg.
+    info = MediaInfo(
+        5,
+        0,
+        "wav",
+        False,
+        None,
+        0,
+        None,
+        False,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        ColorTags(None, None, None, None),
+        None,
+        (AudioStream(0, "pcm_s16le", 48000, 1, "mono", 16, None),),
+        (),
+    )
+    monkeypatch.setattr(media, "probe_media", lambda path: info)
+    monkeypatch.setenv("DECLIP_TRANSCRIBER", "fake")
+    monkeypatch.setattr(cli.detect, "detect_waveform_gaps", lambda *a, **k: [])
+
+    def transcript(self, source, opts):
+        assert opts.quiet is False
+        print("Detected language: English")
+        return Transcript("fake", "fixture", "en", None, (), ())
+
+    monkeypatch.setattr(FakeTranscriber, "transcribe", transcript)
+    result = CliRunner().invoke(cli.cli, [command, str(source)])
+    assert result.exit_code == 0, result.output
+    assert result.stdout.startswith("Detected language: English\n")
+    assert "Detected language: English" not in result.stderr

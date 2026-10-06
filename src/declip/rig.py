@@ -342,6 +342,8 @@ def resolve_options(
         fmt = NleFormat.EDL
         origins["nle_format"] = origins["output_mode"]
     origins["rig_name"] = origins["tier"] = "rig" if profile is not None else "builtin"
+    # Console output defaults to human mode. JSON callers set quiet at the CLI boundary.
+    origins["quiet"] = "builtin"
     transcribe_fields = (
         "model",
         "language",

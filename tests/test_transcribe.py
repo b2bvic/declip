@@ -136,6 +136,81 @@ def test_real_normalization_and_kwargs(backend, libraries, tmp_path):
         assert calls[0][1]["vad_filter"] is False
 
 
+@pytest.mark.parametrize("quiet", [False, True])
+def test_mlx_verbosity_preserves_human_mode(quiet, libraries, tmp_path):
+    calls, _ = libraries
+    MlxTranscriber().transcribe(
+        wav_file(tmp_path / "clip.wav"),
+        TranscribeOptions("small", device="metal", quiet=quiet),
+    )
+    assert calls[0][1]["verbose"] is (None if quiet else False)
+
+
+@pytest.mark.ffmpeg
+@pytest.mark.parametrize("backend", ["mlx", "faster"])
+@pytest.mark.parametrize(
+    "command", ["detect", "clean", "process", "plan", "transcribe"]
+)
+def test_json_commands_with_printing_model_library(
+    backend,
+    command,
+    libraries,
+    tmp_path,
+    monkeypatch,
+):
+    from click.testing import CliRunner
+    from declip.cli import cli
+
+    if backend == "mlx":
+        original = sys.modules["mlx_whisper"].transcribe
+
+        def run(*args, **kwargs):
+            assert kwargs["verbose"] is None
+            print("Detected language: English")
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(sys.modules["mlx_whisper"], "transcribe", run)
+    else:
+        model = sys.modules["faster_whisper"].WhisperModel
+        original = model.transcribe
+
+        def run(self, *args, **kwargs):
+            print("Detected language: English")
+            rows, info = original(self, *args, **kwargs)
+
+            def segments():
+                # faster-whisper consumes the model lazily.
+                print("Decoding segments")
+                yield from rows
+
+            return segments(), info
+
+        monkeypatch.setattr(model, "transcribe", run)
+    source = wav_file(tmp_path / "source.wav", 5)
+    result = CliRunner().invoke(
+        cli,
+        [
+            command,
+            str(source),
+            "--json",
+            "--backend",
+            backend,
+            "--device",
+            "metal" if backend == "mlx" else "cpu",
+            "--stages",
+            "fillers",
+        ],
+    )
+    assert result.exit_code == 0, (result.output, result.exception)
+    assert isinstance(json.loads(result.stdout), dict)
+    _, end = json.JSONDecoder().raw_decode(result.stdout)
+    assert result.stdout[end:] == "\n"
+    # Both language detection and full transcription use the protected scope.
+    assert result.stderr.count("Detected language: English") == 2
+    if backend == "faster":
+        assert result.stderr.count("Decoding segments") == 2
+
+
 @pytest.mark.parametrize("backend", ["mlx", "faster"])
 def test_chunked_prompt_every_window_and_offsets(backend, libraries, tmp_path):
     calls, _ = libraries

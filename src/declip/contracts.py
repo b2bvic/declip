@@ -180,6 +180,7 @@ class TranscribeOptions:
     condition_on_previous_text: bool = False
     device: str = "auto"  # auto | metal | cuda | cpu
     compute_type: str = "auto"  # auto | float16 | int8_float16 | int8
+    quiet: bool = False  # Suppress backend console output for JSON callers.
 
 
 @dataclass(frozen=True)

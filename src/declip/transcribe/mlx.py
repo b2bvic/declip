@@ -39,7 +39,7 @@ class MlxTranscriber:
                 initial_prompt=opts.initial_prompt,
                 word_timestamps=True,
                 condition_on_previous_text=opts.condition_on_previous_text,
-                verbose=False,
+                verbose=None if opts.quiet else False,
             )
             return normalize(
                 result.get("segments", ()),
