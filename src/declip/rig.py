@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import sys
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,10 +19,13 @@ from declip.contracts import (
     DeclipError,
     HardwareInfo,
     Loudness,
+    NleFormat,
+    OutputMode,
     ResolvedOptions,
     RigAnswers,
     RigProfile,
     Tier,
+    TranscribeOptions,
 )
 
 
@@ -35,16 +40,22 @@ def rig_path(name: str, config_dir: Path) -> Path:
 def _loudness(value: Any) -> Loudness | None:
     if value is None or value == "none":
         return None
-    if isinstance(value, Loudness):
-        target = value
-    elif isinstance(value, Mapping):
-        target = Loudness(**value)
-    else:
-        target = audiochain.loudness_for_target(int(value))
-    if target is not None and not all(
-        math.isfinite(v) for v in (target.i, target.tp, target.lra)
-    ):
-        raise DeclipError("Loudness targets must be finite")
+    try:
+        if isinstance(value, Loudness):
+            target = value
+        elif isinstance(value, Mapping):
+            target = Loudness(**value)
+        else:
+            if isinstance(value, bool) or isinstance(value, float):
+                raise ValueError("expected an integer loudness target")
+            target = audiochain.loudness_for_target(int(value))
+        if target is not None and not all(
+            not isinstance(v, bool) and math.isfinite(v)
+            for v in (target.i, target.tp, target.lra)
+        ):
+            raise ValueError("loudness targets must be finite numbers")
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise DeclipError(f"Invalid loudness target: {exc}") from exc
     return target
 
 
@@ -59,11 +70,15 @@ def _normalize_profile(profile: RigProfile) -> RigProfile:
         raise DeclipError("audio.eq_chain must be a string")
     audiochain.validate_filter_chain(chain)
     chain, trailing = audiochain.split_loudnorm(chain)
-    audio["eq_chain"] = chain
-    target = trailing if trailing is not None else _loudness(audio.get("loudness"))
-    audio["loudness"] = (
-        None if target is None else {"i": target.i, "tp": target.tp, "lra": target.lra}
-    )
+    if "eq_chain" in audio:
+        audio["eq_chain"] = chain
+    if trailing is not None or "loudness" in audio:
+        target = trailing if trailing is not None else _loudness(audio["loudness"])
+        audio["loudness"] = (
+            None
+            if target is None
+            else {"i": target.i, "tp": target.tp, "lra": target.lra}
+        )
     return replace(profile, audio=audio, review={"required": True})
 
 
@@ -266,6 +281,190 @@ def resolve_options(
     profile: RigProfile | None,
     config_defaults: Mapping[str, Any],
 ) -> ResolvedOptions:
-    raise NotImplementedError(
-        "Option resolution is implemented in the next logical change"
+    """Resolve explicit CLI values over rig, config, and built-in defaults.
+
+    CLI None means an unset flag. Use 'none' to disable loudness explicitly.
+    Origins use scalar option names, including the TranscribeOptions fields.
+    Presets accept a name or an already resolved (chain, loudness) pair.
+    """
+    builtin = dict(BUILTIN_DEFAULTS)
+    builtin.pop("preset")
+    builtin.update(
+        model="large-v3-turbo",
+        compute_type="auto",
+        initial_prompt=None,
+        prompt_mode="auto",
+        condition_on_previous_text=False,
+        eq_chain="",
+        loudness=audiochain.loudness_for_target(-16),
     )
+    config = _option_layer(config_defaults, origin="config")
+    rig_values = {}
+    if profile is not None:
+        profile = _normalize_profile(profile)
+        rig_values.update(profile.transcribe)
+        rig_values.update(profile.audio)
+        rig_values.update(profile.detect)
+        rig_values.update(profile.video)
+        rig_values.update(profile.output)
+        rig_values = _aliases(rig_values)
+        rig_values.setdefault(
+            "audio_bitrate", audiochain.TIER_AAC_BITRATE[profile.tier]
+        )
+    cli = _option_layer(
+        {key: value for key, value in cli_values.items() if value is not None},
+        origin="cli",
+    )
+    values, origins = {}, {}
+    for origin, layer in (
+        ("builtin", builtin),
+        ("config", config),
+        ("rig", rig_values),
+        ("cli", cli),
+    ):
+        for key, value in layer.items():
+            if key in builtin:
+                values[key], origins[key] = value, origin
+    values["loudness"] = _loudness(values["loudness"])
+    audiochain.validate_filter_chain(values["eq_chain"])
+    values["eq_chain"], trailing = audiochain.split_loudnorm(values["eq_chain"])
+    if trailing is not None:
+        values["loudness"] = trailing
+        origins["loudness"] = origins["eq_chain"]
+    _validate_options(values)
+    mode = OutputMode(values["output_mode"])
+    fmt = NleFormat(values["nle_format"]) if values["nle_format"] is not None else None
+    if mode == OutputMode.RENDER:
+        fmt = None
+        values["sidecar_audio"] = False
+        origins["nle_format"] = origins["sidecar_audio"] = origins["output_mode"]
+    elif fmt is None:
+        fmt = NleFormat.EDL
+        origins["nle_format"] = origins["output_mode"]
+    origins["rig_name"] = origins["tier"] = "rig" if profile is not None else "builtin"
+    transcribe_fields = (
+        "model",
+        "language",
+        "initial_prompt",
+        "prompt_mode",
+        "condition_on_previous_text",
+        "device",
+        "compute_type",
+    )
+    transcribe = TranscribeOptions(**{key: values[key] for key in transcribe_fields})
+    scalar = {
+        key: value for key, value in values.items() if key not in transcribe_fields
+    }
+    scalar.update(output_mode=mode, nle_format=fmt)
+    return ResolvedOptions(
+        rig_name=profile.name if profile is not None else None,
+        tier=profile.tier if profile is not None else None,
+        transcribe=transcribe,
+        origins=origins,
+        **scalar,
+    )
+
+
+def _aliases(values: Mapping[str, Any]) -> dict[str, Any]:
+    result = dict(values)
+    for alias, key in {
+        "eq": "eq_chain",
+        "codec": "video_codec",
+        "mode": "output_mode",
+        "margin": "margin_ms",
+        "max_gap": "max_gap_ms",
+        "crossfade": "crossfade_ms",
+        "remove_retakes": "retakes",
+    }.items():
+        if alias in result:
+            result.setdefault(key, result.pop(alias))
+    if "enhance" in result:
+        result.setdefault("enhancer", "auto" if result.pop("enhance") else "none")
+    return result
+
+
+def _option_layer(values: Mapping[str, Any], *, origin: str) -> dict[str, Any]:
+    result = _aliases(values)
+    # Read-only preset loading stays in audiochain. P10 may supply a resolved pair.
+    preset_dir = Path(
+        os.environ.get("DECLIP_CONFIG_DIR", str(Path.home() / ".config" / "declip"))
+    )
+    if "preset" in result:
+        preset = result.pop("preset")
+        if isinstance(preset, (tuple, list)) and len(preset) == 2:
+            chain, target = preset
+        else:
+            try:
+                chain, target = audiochain.resolve_preset(preset, preset_dir)
+            except DeclipError as exc:
+                # Filter rejection and corrupt preset files must never fall back.
+                if origin != "config" or not str(exc).startswith("Unknown preset '"):
+                    raise
+                print(
+                    f"Unknown preset '{preset}' in {preset_dir / 'config.json'}; using raw",
+                    file=sys.stderr,
+                )
+                chain, target = audiochain.resolve_preset("raw", preset_dir)
+        result.setdefault("eq_chain", chain)
+        result.setdefault("loudness", target)
+    if "eq_chain" in result:
+        chain = result["eq_chain"]
+        if not isinstance(chain, str):
+            raise DeclipError("eq_chain must be a string")
+        audiochain.validate_filter_chain(chain)
+        result["eq_chain"], trailing = audiochain.split_loudnorm(chain)
+        if trailing is not None and "loudness" not in values:
+            result["loudness"] = trailing
+    return result
+
+
+def _validate_options(values: Mapping[str, Any]) -> None:
+    choices = {
+        "backend": {"auto", "mlx", "faster", "fake"},
+        "device": {"auto", "metal", "cuda", "cpu"},
+        "compute_type": {"auto", "float16", "int8_float16", "int8"},
+        "prompt_mode": {"auto", "initial", "hotwords", "chunked"},
+        "enhancer": {"none", "auto", "afftdn", "deepfilter"},
+        "video_codec": {"match", "h264", "hevc"},
+        "quality": {"match", "high", "small"},
+        "encoder": {"auto", "software"},
+        "output_mode": {"render", "nle"},
+        "nle_format": {None, "edl", "fcpxml"},
+    }
+    for key, allowed in choices.items():
+        if (values[key] is not None and not isinstance(values[key], str)) or values[
+            key
+        ] not in allowed:
+            raise DeclipError(f"Invalid {key}: {values[key]}")
+    for key in ("allow_8bit", "sidecar_audio", "retakes", "condition_on_previous_text"):
+        if type(values[key]) is not bool:
+            raise DeclipError(f"{key} must be a Boolean")
+    for key in (
+        "enhancer_strength",
+        "crossfade_ms",
+        "audio_bitrate",
+        "margin_ms",
+        "min_confidence",
+        "gap_noise_db",
+        "max_gap_ms",
+        "min_silence_ms",
+    ):
+        value = values[key]
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+        ):
+            raise DeclipError(f"{key} must be a finite number")
+        if key != "gap_noise_db" and value < 0:
+            raise DeclipError(f"{key} must not be negative")
+    for key in ("min_confidence", "enhancer_strength"):
+        if values[key] > 1:
+            raise DeclipError(f"{key} must be between 0 and 1")
+    if type(values["audio_bitrate"]) is not int or values["audio_bitrate"] <= 0:
+        raise DeclipError("audio_bitrate must be a positive integer")
+    if not isinstance(values["model"], str) or not values["model"]:
+        raise DeclipError("model must be a non-empty string")
+    for key in ("language", "initial_prompt"):
+        if values[key] is not None and not isinstance(values[key], str):
+            raise DeclipError(f"{key} must be a string or null")
