@@ -1,2 +1,31 @@
 <!doctype html>
-<html lang="en"><title>declip review</title><p>Review is unavailable in this build.</p></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="declip-token" content="__DECLIP_TOKEN__">
+  <title>declip review</title>
+  <link rel="stylesheet" href="/static/style.css?token=__DECLIP_TOKEN__">
+  <script defer src="/static/app.js?token=__DECLIP_TOKEN__"></script>
+</head>
+<body>
+  <header><h1>declip review</h1><p id="source"></p><p id="summary" aria-live="polite"></p></header>
+  <main>
+    <section aria-label="Preview">
+      <video id="player" controls preload="metadata" src="/media?token=__DECLIP_TOKEN__"></video>
+      <p><label><input id="play-result" type="checkbox"> Play result (skip accepted cuts)</label>
+      <button id="around" type="button">Play around current cut</button></p>
+    </section>
+    <p id="notice" role="status" aria-live="polite"></p>
+    <section aria-label="Review controls">
+      <p>j / k: next / previous cut. a: accept. x: reject. Space: play. p: play result around cut.</p>
+      <p>Select words, then press c to add a manual cut. Click a word to seek. Click an automatic cut to toggle.</p>
+      <label>Accept all of kind <select id="bulk-kind"><option>filler</option><option>gap</option><option>retake</option></select></label>
+      <button id="bulk" type="button">Accept kind</button>
+      <button id="finish" type="button">Finish review</button>
+    </section>
+    <section aria-label="Transcript"><h2>Transcript</h2><div id="transcript"></div></section>
+    <section aria-label="Cuts"><h2>Planned cuts</h2><div id="cuts"></div></section>
+  </main>
+</body>
+</html>
