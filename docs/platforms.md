@@ -123,4 +123,4 @@ GitHub Actions runs the test suite on `ubuntu-latest` and `macos-latest` for eac
 | CPU on Linux | Assumed | The CPU receipt measures this Mac only; no Linux execution receipt exists. |
 | Windows | Deferred; planned and untested | Ruling 10 (2026.10.06) moves Windows to a later release. No Windows verification attempted. |
 | Prompt persistence after thirty seconds | Unproven | These smoke receipts measure prompted synthetic recall. They do not compare a no-prompt baseline or establish real-speech persistence. |
-| Hosted CI | Assumed | Runner jobs are configured. These local hardware receipts contain no hosted CI result. |
+| Hosted CI | Verified | GitHub Actions passed all jobs on `ubuntu-latest` and `macos-latest` (run 37505366506). These runners have no GPU. |
