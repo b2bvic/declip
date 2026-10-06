@@ -2,17 +2,88 @@ name: CI
 on: [push, pull_request]
 permissions:
   contents: read
+defaults:
+  run:
+    shell: bash
+env:
+  DECLIP_CONFIG_DIR: ${{ runner.temp }}/declip-config
+  DECLIP_CACHE_DIR: ${{ runner.temp }}/declip-cache
+  HF_HUB_OFFLINE: '1'
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: '0.9.26'
+          python-version: '3.11'
+      - name: Install ffmpeg on Linux
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Install ffmpeg on macOS
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+      - run: uv sync --locked --extra dev
+      - run: uv run --locked --extra dev pytest -q --require ffmpeg --require libx265 -m "not hwenc"
+      - run: uv run --locked --extra dev ruff check src tests
+  install-smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
+          version: '0.9.26'
           python-version: '3.11'
-      - run: python -m pip install -e ".[dev]"
-      - run: python -m pytest -q
-      - run: python -m ruff check --select E9,F63,F7,F82 src tests
+      - run: uv tool install .
+      - run: declip --help
+      - name: Check doctor exit and diagnostics
+        run: |
+          set +e
+          declip doctor >doctor.stdout 2>doctor.stderr
+          status=$?
+          set -e
+          cat doctor.stdout doctor.stderr
+          test "$status" -eq 0 || test "$status" -eq 1
+          if grep -q Traceback doctor.stderr; then exit 1; fi
+  audit:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-latest, extra: cpu, platform: linux}
+          - {os: ubuntu-latest, extra: cuda, platform: linux}
+          - {os: macos-latest, extra: cpu, platform: macos}
+          - {os: macos-latest, extra: mac, platform: macos}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: '0.9.26'
+          python-version: '3.11'
+      - run: uv run --locked --extra dev python scripts/audit.py --extra ${{ matrix.extra }} --platform ${{ matrix.platform }}
+      - name: Save audit receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: audit-${{ matrix.extra }}-${{ matrix.platform }}
+          path: security/audit/${{ matrix.extra }}-${{ matrix.platform }}.json
+          if-no-files-found: error
