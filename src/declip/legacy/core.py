@@ -1,226 +1,74 @@
-#!/usr/bin/env -S uv run --script --with mlx-whisper --with click --with resemble-enhance --with rich --prerelease=allow --python 3.11 --quiet
-# /// script
-# requires-python = ">=3.11"
-# dependencies = [
-#   "mlx-whisper>=0.4",
-#   "click>=8.0",
-#   "resemble-enhance>=0.0.2.dev",
-#   "rich>=13.7",
-# ]
-# ///
-"""declip — Filler word removal + Studio Sound enhancement + Voice EQ.
+"""Temporary 0.3.0 calculation and CLI bridge. P10 removes this module."""
 
-Built for M4 Pro Metal 4. Replaces Descript.
-Dry-run by default. Pass --execute to process.
-"""
-
-import contextlib
 import difflib
 import hashlib
 import json
-import os
 import re
+import shutil
 import subprocess
-import sys
 import tempfile
 import time
-import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import NamedTuple
 
 import click
 from click.core import ParameterSource
-from rich.console import Console
-from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn, TaskID
+from rich import box
 from rich.table import Table
 from rich.text import Text
-from rich.theme import Theme
-from rich import box
 
-VERSION = "0.3.0"
+from declip import __version__, audiochain
+from declip import config as user_config
+from declip import fillers as filler_files
+from declip.contracts import DeclipError, ReviewRequired
+from declip.fsutil import atomic_write_json
+from declip.paths import cache_dir, config_dir
+from declip.ui import (
+    IS_TTY,
+    MARK,
+    Spinner,
+    console,
+    echo,
+    progress_tick,
+    ui_done,
+    ui_file_info,
+    ui_result,
+    ui_warn,
+)
 
+VERSION = __version__
 
-# ── CLI UI — SWS Brand ────────────────────────────────────
-
-MARK = "◎"
-DONE = "●"
-IS_TTY = sys.stdout.isatty()
-
-SWS_THEME = Theme({
-    "accent": "dodger_blue2",
-    "done": "dodger_blue2",
-    "warn": "yellow",
-    "error": "red",
-    "muted": "dim",
-    "stat": "bold dodger_blue2",
-})
-console = Console(highlight=False, theme=SWS_THEME)
-
-# ANSI fallbacks for non-TTY / piped output
-_DIM = "\033[2m"
-_BOLD = "\033[1m"
-_GREEN = "\033[32m"
-_ACCENT = "\033[36m"
-_YELLOW = "\033[33m"
-_RED = "\033[31m"
-_RESET = "\033[0m"
-
-
-class Spinner:
-    """Context manager wrapping Rich Progress for single-step spinners.
-    TTY: animated ◐◓◑◒ spinner. Non-TTY: static line."""
-
-    def __init__(self, message: str):
-        self.message = message
-        self._progress = None
-
-    def __enter__(self):
-        if IS_TTY:
-            self._progress = Progress(
-                SpinnerColumn("dots", style="accent", finished_text=f"[done]{DONE}[/done]"),
-                TextColumn("{task.description}"),
-                console=console,
-                transient=True,
-            )
-            self._progress.__enter__()
-            self._task = self._progress.add_task(self.message, total=1)
-        else:
-            click.echo(f"  {_ACCENT}◐{_RESET} {self.message}")
-        return self
-
-    def __exit__(self, *args):
-        if self._progress:
-            self._progress.__exit__(*args)
-
-    def update(self, message: str):
-        self.message = message
-        if self._progress:
-            self._progress.update(self._task, description=message)
-
-
-def progress_tick(i: int, n: int, label: str, milestones: set | None = None):
-    """Emit milestone progress lines in non-TTY mode.
-    TTY mode: overwrite single line. Non-TTY: print at 25/50/75/100%."""
-    if IS_TTY:
-        pct = int((i + 1) / n * 100) if n > 0 else 100
-        sys.stdout.write(f"\r\033[2K\r  ◐ {label} {i + 1}/{n} ({pct}%)")
-        sys.stdout.flush()
-        return
-    if milestones is None:
-        return
-    pct = int((i + 1) / n * 100) if n > 0 else 100
-    if pct in milestones:
-        milestones.discard(pct)
-        click.echo(f"    {_DIM}{pct}% — {label} {i + 1}/{n}{_RESET}")
-
-
-def ui_banner():
-    """Print branded startup mark."""
-    if IS_TTY:
-        console.print(f"\n  [accent]{MARK}[/accent] [bold]declip[/bold] [muted]v{VERSION}[/muted]")
-        console.print(f"  [muted]🌐 Victor Valentine Romo · victorvalentineromo.com · scalewithsearch.com[/muted]")
-    else:
-        click.echo(f"\n  {_ACCENT}{MARK}{_RESET} {_BOLD}declip{_RESET} {_DIM}v{VERSION}{_RESET}")
-        click.echo(f"  {_DIM}\U0001f310 Victor Valentine Romo · victorvalentineromo.com · scalewithsearch.com{_RESET}")
-
-
-def ui_file_info(path: Path, info: dict, duration: float):
-    """Print file info under the banner."""
-    vstream = next((s for s in info.get("streams", []) if s.get("codec_type") == "video" and s.get("codec_name") != "mjpeg"), None)
-    astream = next((s for s in info.get("streams", []) if s.get("codec_type") == "audio"), None)
-
-    parts = [f"{duration / 60:.1f} min"]
-    if vstream:
-        parts.append(f"{vstream.get('codec_name')} {vstream.get('width')}×{vstream.get('height')}")
-    if astream:
-        parts.append(f"{astream.get('codec_name')} {int(astream.get('sample_rate', 0)) // 1000}kHz")
-
-    if IS_TTY:
-        console.print(f"\n  [accent]{MARK}[/accent] [bold]{path.name}[/bold]")
-        console.print(f"    [muted]{' · '.join(parts)}[/muted]")
-        console.print()
-    else:
-        click.echo(f"\n  {_ACCENT}{MARK}{_RESET} {_BOLD}{path.name}{_RESET}")
-        click.echo(f"    {_DIM}{' · '.join(parts)}{_RESET}")
-        click.echo()
-
-
-def ui_done(message: str, detail: str = ""):
-    """Print completed step with filled circle."""
-    if IS_TTY:
-        d = f" [muted]({detail})[/muted]" if detail else ""
-        console.print(f"  [done]{DONE}[/done] {message}{d}")
-    else:
-        d = f" {_DIM}({detail}){_RESET}" if detail else ""
-        click.echo(f"  {_GREEN}{DONE}{_RESET} {message}{d}")
-
-
-def ui_warn(message: str):
-    """Print warning."""
-    if IS_TTY:
-        console.print(f"  [warn]○[/warn] {message}")
-    else:
-        click.echo(f"  {_YELLOW}○{_RESET} {message}")
-
-
-def ui_error(message: str):
-    """Print error."""
-    if IS_TTY:
-        console.print(f"  [error]○[/error] {message}")
-    else:
-        click.echo(f"  {_RED}○{_RESET} {message}")
-
-
-def ui_result(path: Path, old_duration: float, new_duration: float, n_edits: float, time_removed: float, preset: str, enhanced: bool):
-    """Print final result — branded panel or plain text."""
-    if IS_TTY:
-        body = Text()
-        body.append(f"{old_duration / 60:.1f} min → {new_duration / 60:.1f} min", style="stat")
-        body.append(f"\n{int(n_edits)} edits applied ({time_removed:.1f}s)")
-        body.append(f"\nPreset: {preset} · Enhanced: {'yes' if enhanced else 'no'}", style="muted")
-        console.print()
-        console.print(Panel(
-            body,
-            title=f"[accent]{MARK}[/accent] [bold]{path.name}[/bold]",
-            border_style="accent",
-            box=box.ROUNDED,
-            padding=(1, 2),
-        ))
-        console.print()
-    else:
-        click.echo()
-        click.echo(f"  {_ACCENT}{MARK}{_RESET} {_BOLD}{path.name}{_RESET}")
-        click.echo(f"    {old_duration / 60:.1f} min → {new_duration / 60:.1f} min {_DIM}({int(n_edits)} edits, {time_removed:.1f}s removed){_RESET}")
-        click.echo(f"    {_DIM}Preset: {preset} · Enhanced: {'yes' if enhanced else 'no'}{_RESET}")
-        click.echo()
-CACHE_DIR = Path.home() / ".cache" / "declip"
-CONFIG_DIR = Path.home() / ".config" / "declip"
+CACHE_DIR = cache_dir()
+CONFIG_DIR = config_dir()
 TRANSCRIPT_CACHE = CACHE_DIR / "transcripts"
-ENHANCE_CACHE = CACHE_DIR / "enhanced"
 AUDIT_LOG = CACHE_DIR / "audit.jsonl"
 PRESETS_FILE = CONFIG_DIR / "presets.json"
 FILLERS_FILE = CONFIG_DIR / "fillers.txt"
 
 DEFAULT_FILLERS = {
-    "um", "uh", "uhh", "umm", "ummm", "hmm", "hm",
-    "like", "you know", "i mean", "sort of", "kind of",
-    "basically", "actually", "literally", "right", "so", "well",
+    "um",
+    "uh",
+    "uhh",
+    "umm",
+    "ummm",
+    "hmm",
+    "hm",
+    "like",
+    "you know",
+    "i mean",
+    "sort of",
+    "kind of",
+    "basically",
+    "actually",
+    "literally",
+    "right",
+    "so",
+    "well",
 }
 
 # Context-sensitive fillers: only flagged under specific conditions
 CONTEXT_FILLERS = {"like", "so", "well", "right", "actually"}
-
-DEFAULT_PRESET_CHAIN = (
-    "highpass=f=60:poles=2,"
-    "agate=threshold=0.05:attack=25:release=200:ratio=3:knee=6,"
-    "bass=gain=5:frequency=110:width_type=s:width=0.7,"
-    "equalizer=f=180:width_type=o:width=0.5:g=3,"
-    "equalizer=f=3000:width_type=o:width=1.0:g=-2,"
-    "acompressor=threshold=0.15:ratio=4:attack=5:release=50:makeup=2:knee=2,"
-    "loudnorm=I=-16:TP=-1.5:LRA=11"
-)
 
 
 class CutRegion(NamedTuple):
@@ -241,8 +89,14 @@ class KeepRegion(NamedTuple):
 def probe_media(path: Path) -> dict:
     """Get media info via ffprobe."""
     cmd = [
-        "ffprobe", "-v", "quiet", "-print_format", "json",
-        "-show_format", "-show_streams", str(path),
+        "ffprobe",
+        "-v",
+        "quiet",
+        "-print_format",
+        "json",
+        "-show_format",
+        "-show_streams",
+        str(path),
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
@@ -282,11 +136,20 @@ def get_audio_sample_rate(info: dict) -> int:
 
 
 def extract_audio(input_path: Path, tmp_dir: Path) -> Path:
-    """Extract audio to WAV for Whisper/Resemble processing."""
+    """Extract audio to WAV for Whisper/transcription processing."""
     wav_path = tmp_dir / "audio.wav"
     cmd = [
-        "ffmpeg", "-y", "-i", str(input_path),
-        "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(input_path),
+        "-vn",
+        "-acodec",
+        "pcm_s16le",
+        "-ar",
+        "16000",
+        "-ac",
+        "1",
         str(wav_path),
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
@@ -296,11 +159,18 @@ def extract_audio(input_path: Path, tmp_dir: Path) -> Path:
 
 
 def extract_audio_fullrate(input_path: Path, tmp_dir: Path) -> Path:
-    """Extract audio at original sample rate for Resemble Enhance."""
+    """Extract audio at original sample rate for enhancement."""
     wav_path = tmp_dir / "audio_full.wav"
     cmd = [
-        "ffmpeg", "-y", "-i", str(input_path),
-        "-vn", "-acodec", "pcm_s16le", "-ac", "1",
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(input_path),
+        "-vn",
+        "-acodec",
+        "pcm_s16le",
+        "-ac",
+        "1",
         str(wav_path),
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
@@ -330,17 +200,20 @@ def file_hash(path: Path) -> str:
 
 def transcribe(audio_path: Path, model_name: str, use_cache: bool = True) -> dict:
     """Transcribe audio using mlx-whisper with Metal acceleration."""
-    cache_key = hashlib.sha256(f"{file_hash(audio_path)}:{model_name}".encode()).hexdigest()[:16]
+    cache_key = hashlib.sha256(
+        f"{file_hash(audio_path)}:{model_name}".encode()
+    ).hexdigest()[:16]
     cache_file = TRANSCRIPT_CACHE / f"{cache_key}.json"
 
     if use_cache and cache_file.exists():
-        click.echo(f"  Using cached transcript: {cache_file.name}")
+        echo(f"  Using cached transcript: {cache_file.name}")
         return json.loads(cache_file.read_text())
 
-    click.echo(f"  Transcribing with {model_name} (Metal GPU)...")
+    echo(f"  Transcribing with {model_name} (Metal GPU)...")
     t0 = time.time()
 
     import mlx_whisper
+
     result = mlx_whisper.transcribe(
         str(audio_path),
         path_or_hf_repo=model_name,
@@ -349,7 +222,7 @@ def transcribe(audio_path: Path, model_name: str, use_cache: bool = True) -> dic
     )
 
     elapsed = time.time() - t0
-    click.echo(f"  Transcribed in {elapsed:.1f}s")
+    echo(f"  Transcribed in {elapsed:.1f}s")
 
     # Cache the result
     TRANSCRIPT_CACHE.mkdir(parents=True, exist_ok=True)
@@ -362,15 +235,9 @@ def transcribe(audio_path: Path, model_name: str, use_cache: bool = True) -> dic
 
 
 def load_fillers() -> set[str]:
-    """Load filler word list from config or defaults."""
-    if FILLERS_FILE.exists():
-        words = set()
-        for line in FILLERS_FILE.read_text().splitlines():
-            line = line.strip().lower()
-            if line and not line.startswith("#"):
-                words.add(line)
-        return words if words else DEFAULT_FILLERS
-    return DEFAULT_FILLERS
+    """Load the shared English filler set."""
+    data = filler_files.load_fillers("en", config_dir=CONFIG_DIR)
+    return set(data.single | data.double) if data else set()
 
 
 def is_sentence_start(words: list[dict], idx: int) -> bool:
@@ -433,12 +300,16 @@ def detect_fillers(
                 next_word = re.sub(r"[^\w\s']", "", next_word)
                 two_word = f"{word_text} {next_word}"
                 if two_word in fillers:
-                    cuts.append(CutRegion(
-                        start=start,
-                        end=words[i + 1].get("end", end),
-                        word=two_word,
-                        confidence=min(confidence, words[i + 1].get("probability", 1.0)),
-                    ))
+                    cuts.append(
+                        CutRegion(
+                            start=start,
+                            end=words[i + 1].get("end", end),
+                            word=two_word,
+                            confidence=min(
+                                confidence, words[i + 1].get("probability", 1.0)
+                            ),
+                        )
+                    )
                     skip_next = True
                     continue
 
@@ -448,7 +319,11 @@ def detect_fillers(
 
             # Context rules for ambiguous fillers
             if word_text in CONTEXT_FILLERS:
-                if word_text == "like" and not is_sentence_start(words, i) and not has_following_pause(words, i):
+                if (
+                    word_text == "like"
+                    and not is_sentence_start(words, i)
+                    and not has_following_pause(words, i)
+                ):
                     continue  # Mid-sentence "I like this" is usually meaningful
                 if word_text in ("so", "well") and not is_sentence_start(words, i):
                     continue  # Mid-sentence "so" is usually meaningful
@@ -457,10 +332,14 @@ def detect_fillers(
                 if word_text == "actually" and not has_following_pause(words, i):
                     continue  # "actually works" — not filler
 
-            cuts.append(CutRegion(
-                start=start, end=end,
-                word=word_text, confidence=confidence,
-            ))
+            cuts.append(
+                CutRegion(
+                    start=start,
+                    end=end,
+                    word=word_text,
+                    confidence=confidence,
+                )
+            )
 
     return merge_cuts(cuts, margin_ms)
 
@@ -497,8 +376,10 @@ def merge_cuts(cuts: list[CutRegion], margin_ms: float) -> list[CutRegion]:
         else:
             merged.append(current)
             current = CutRegion(
-                start=expanded_start, end=expanded_end,
-                word=cut.word, confidence=cut.confidence,
+                start=expanded_start,
+                end=expanded_end,
+                word=cut.word,
+                confidence=cut.confidence,
             )
 
     merged.append(current)
@@ -544,12 +425,14 @@ def detect_gaps(transcript: dict, max_gap_ms: float = 300) -> list[CutRegion]:
                 # Cut from the middle of the gap
                 cut_start = curr_end + (max_gap / 2)
                 cut_end = cut_start + trim
-                cuts.append(CutRegion(
-                    start=cut_start,
-                    end=cut_end,
-                    word=f"gap ({gap:.2f}s→{max_gap:.2f}s)",
-                    confidence=1.0,
-                ))
+                cuts.append(
+                    CutRegion(
+                        start=cut_start,
+                        end=cut_end,
+                        word=f"gap ({gap:.2f}s→{max_gap:.2f}s)",
+                        confidence=1.0,
+                    )
+                )
 
     # Also check gaps between segments
     segments = transcript.get("segments", [])
@@ -562,17 +445,21 @@ def detect_gaps(transcript: dict, max_gap_ms: float = 300) -> list[CutRegion]:
             trim = gap - max_gap
             cut_start = curr_end + (max_gap / 2)
             cut_end = cut_start + trim
-            cuts.append(CutRegion(
-                start=cut_start,
-                end=cut_end,
-                word=f"gap ({gap:.2f}s→{max_gap:.2f}s)",
-                confidence=1.0,
-            ))
+            cuts.append(
+                CutRegion(
+                    start=cut_start,
+                    end=cut_end,
+                    word=f"gap ({gap:.2f}s→{max_gap:.2f}s)",
+                    confidence=1.0,
+                )
+            )
 
     return sorted(cuts, key=lambda c: c.start)
 
 
-def detect_retakes(transcript: dict, similarity_threshold: float = 0.6, window_s: float = 15.0) -> list[CutRegion]:
+def detect_retakes(
+    transcript: dict, similarity_threshold: float = 0.6, window_s: float = 15.0
+) -> list[CutRegion]:
     """Detect repeated lines (retakes) and mark earlier instances for cutting.
 
     Compares sentence-level chunks within a sliding time window. When two chunks
@@ -608,12 +495,14 @@ def detect_retakes(transcript: dict, similarity_threshold: float = 0.6, window_s
                 text = " ".join(current_words).lower().strip()
                 text = re.sub(r"[^\w\s]", "", text)
                 if len(current_words) >= 3:  # Skip tiny fragments
-                    chunks.append({
-                        "text": text,
-                        "start": current_start,
-                        "end": w_end,
-                        "word_count": len(current_words),
-                    })
+                    chunks.append(
+                        {
+                            "text": text,
+                            "start": current_start,
+                            "end": w_end,
+                            "word_count": len(current_words),
+                        }
+                    )
                 current_words = []
                 current_start = None
 
@@ -623,12 +512,14 @@ def detect_retakes(transcript: dict, similarity_threshold: float = 0.6, window_s
         text = re.sub(r"[^\w\s]", "", text)
         last_seg = transcript.get("segments", [])[-1]
         last_word = last_seg.get("words", [])[-1] if last_seg.get("words") else {}
-        chunks.append({
-            "text": text,
-            "start": current_start,
-            "end": last_word.get("end", current_start),
-            "word_count": len(current_words),
-        })
+        chunks.append(
+            {
+                "text": text,
+                "start": current_start,
+                "end": last_word.get("end", current_start),
+                "word_count": len(current_words),
+            }
+        )
 
     # Compare chunks within the time window
     cuts = []
@@ -650,19 +541,23 @@ def detect_retakes(transcript: dict, similarity_threshold: float = 0.6, window_s
 
             if ratio >= similarity_threshold:
                 # Cut the earlier take, keep the later one
-                cuts.append(CutRegion(
-                    start=chunks[i]["start"],
-                    end=chunks[i]["end"],
-                    word=f"retake ({ratio:.0%} match)",
-                    confidence=ratio,
-                ))
+                cuts.append(
+                    CutRegion(
+                        start=chunks[i]["start"],
+                        end=chunks[i]["end"],
+                        word=f"retake ({ratio:.0%} match)",
+                        confidence=ratio,
+                    )
+                )
                 used.add(i)
                 break  # This chunk is consumed, move on
 
     return cuts
 
 
-def invert_cuts(cuts: list[CutRegion], duration: float, min_segment_ms: float = 100) -> list[KeepRegion]:
+def invert_cuts(
+    cuts: list[CutRegion], duration: float, min_segment_ms: float = 100
+) -> list[KeepRegion]:
     """Convert cut regions to keep regions. Drop segments shorter than min_segment_ms."""
     keeps = []
     pos = 0.0
@@ -701,7 +596,7 @@ def print_report(
             # Summary stats
             summary = Text()
             summary.append(f"{len(cuts)}", style="stat")
-            summary.append(f" cuts · ")
+            summary.append(" cuts · ")
             summary.append(f"{total_cut:.1f}s", style="stat")
             summary.append(f" to remove ({pct:.1f}% of {duration:.1f}s)")
             console.print(f"  {summary}")
@@ -711,7 +606,7 @@ def print_report(
             table = Table(
                 box=box.SIMPLE,
                 show_header=True,
-                header_style="bold dodger_blue2",
+                header_style="stat",
                 row_styles=["", "dim"],
                 padding=(0, 1),
                 pad_edge=False,
@@ -724,7 +619,11 @@ def print_report(
             display_cuts = cuts[:30]
             for c in display_cuts:
                 dur = c.end - c.start
-                conf_style = "dodger_blue2" if c.confidence >= 0.8 else ("yellow" if c.confidence >= 0.5 else "red")
+                conf_style = (
+                    "accent"
+                    if c.confidence >= 0.8
+                    else ("yellow" if c.confidence >= 0.5 else "red")
+                )
                 table.add_row(
                     f"{c.start:7.2f}s → {c.end:7.2f}s",
                     f"{dur:.2f}s",
@@ -740,38 +639,40 @@ def print_report(
 
         console.print()
         console.print(f"  [muted]EQ preset:[/muted]    {preset}")
-        enhance_label = "Resemble Enhance (Studio Sound)" if enhance else "off"
+        enhance_label = "enhancement" if enhance else "off"
         console.print(f"  [muted]Enhancement:[/muted]  {enhance_label}")
         console.print()
         console.print("  Pass [bold]--execute[/bold] to process.")
         console.print()
     else:
         # Non-TTY fallback — plain text
-        click.echo()
-        click.echo(f"  DECLIP DRY-RUN REPORT")
-        click.echo()
+        echo()
+        echo("  DECLIP DRY-RUN REPORT")
+        echo()
         if cuts:
-            click.echo(f"  Edits detected:   {len(cuts)}")
-            click.echo(f"  Time to remove:   {total_cut:.1f}s ({pct:.1f}% of {duration:.1f}s)")
-            click.echo()
-            click.echo("  Cuts:")
+            echo(f"  Edits detected:   {len(cuts)}")
+            echo(
+                f"  Time to remove:   {total_cut:.1f}s ({pct:.1f}% of {duration:.1f}s)"
+            )
+            echo()
+            echo("  Cuts:")
             for c in cuts[:25]:
-                click.echo(
+                echo(
                     f"    {c.start:7.2f}s → {c.end:7.2f}s  "
                     f"({c.end - c.start:.2f}s)  "
                     f'"{c.word}" '
                     f"[conf: {c.confidence:.2f}]"
                 )
             if len(cuts) > 25:
-                click.echo(f"    ... and {len(cuts) - 25} more")
+                echo(f"    ... and {len(cuts) - 25} more")
         else:
-            click.echo("  No edits detected.")
-        click.echo()
-        click.echo(f"  EQ preset:    {preset}")
-        click.echo(f"  Enhancement:  {'Resemble Enhance (Studio Sound)' if enhance else 'off'}")
-        click.echo()
-        click.echo("  Pass --execute to process.")
-        click.echo()
+            echo("  No edits detected.")
+        echo()
+        echo(f"  EQ preset:    {preset}")
+        echo(f"  Enhancement:  {'enhancement' if enhance else 'off'}")
+        echo()
+        echo("  Pass --execute to process.")
+        echo()
 
 
 def print_json_report(cuts: list[CutRegion], duration: float):
@@ -781,9 +682,11 @@ def print_json_report(cuts: list[CutRegion], duration: float):
         "duration": duration,
         "fillers": [
             {
-                "start": c.start, "end": c.end,
+                "start": c.start,
+                "end": c.end,
                 "duration": round(c.end - c.start, 3),
-                "word": c.word, "confidence": c.confidence,
+                "word": c.word,
+                "confidence": c.confidence,
             }
             for c in cuts
         ],
@@ -793,101 +696,45 @@ def print_json_report(cuts: list[CutRegion], duration: float):
     click.echo(json.dumps(output, indent=2))
 
 
-# ── Resemble Enhance (Studio Sound) ───────────────────────
+# ── enhancement ───────────────────────
 
 
-def enhance_audio(audio_path: Path, output_path: Path, use_cache: bool = True, force_cpu: bool = False) -> Path:
-    """Run Resemble Enhance for AI denoising + bandwidth restoration."""
-    cache_key = file_hash(audio_path)
-    cache_file = ENHANCE_CACHE / f"{cache_key}.wav"
+def enhance_audio(
+    audio_path: Path, output_path: Path, use_cache: bool = True, force_cpu: bool = False
+) -> Path:
+    raise DeclipError("enhancement is unavailable in this build")
 
-    if use_cache and cache_file.exists():
-        click.echo(f"  Using cached enhancement: {cache_file.name}")
-        # Copy to output
-        subprocess.run(["cp", str(cache_file), str(output_path)], check=True)
-        return output_path
 
-    click.echo(f"  {_ACCENT}◐{_RESET} Running Resemble Enhance...")
-    t0 = time.time()
-
-    # Enable MPS fallback for unsupported ops (weight_norm)
-    os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
-
-    # Let tqdm show chunk progress (resemble_enhance uses trange over 30s chunks)
-    os.environ.pop("TQDM_DISABLE", None)
-
-    import torch
-    import torchaudio
-
-    # Determine device — force CPU to avoid MPS memory pressure crashes
-    if force_cpu or not torch.backends.mps.is_available():
-        device = "cpu"
-        click.echo(f"    {_DIM}Device: CPU{' (forced — stable)' if force_cpu else ''}{_RESET}")
-    else:
-        device = "mps"
-        click.echo(f"    {_DIM}Device: Metal (MPS){_RESET}")
-
-    # Load audio
-    click.echo(f"    {_DIM}Loading audio...{_RESET}")
-    audio, sr = torchaudio.load(str(audio_path))
-    if audio.shape[0] > 1:
-        audio = audio.mean(dim=0, keepdim=True)
-    audio = audio.squeeze()
-    dur_sec = len(audio) / sr
-    click.echo(f"    {_DIM}{dur_sec:.0f}s @ {sr}Hz → denoise + bandwidth restore{_RESET}")
-
-    # Run enhancement
-    from resemble_enhance.enhancer.inference import enhance
-
-    enhanced, new_sr = enhance(
-        audio,
-        sr,
-        device=device,
-        nfe=64,
-        solver="midpoint",
-        lambd=0.1,
-        tau=0.5,
-    )
-
-    # Save
-    if enhanced.dim() == 1:
-        enhanced = enhanced.unsqueeze(0)
-    torchaudio.save(str(output_path), enhanced.cpu(), new_sr)
-
-    elapsed = time.time() - t0
-    click.echo(f"    {_DIM}Enhanced in {elapsed:.1f}s{_RESET}")
-
-    # Cache
-    ENHANCE_CACHE.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["cp", str(output_path), str(cache_file)], check=True)
-
-    return output_path
+def copy_media(source: Path, destination: Path) -> None:
+    """Finalize a legacy output through a portable filesystem copy."""
+    shutil.copyfile(source, destination)
 
 
 # ── EQ Presets ─────────────────────────────────────────────
 
 
 def load_presets() -> dict:
-    """Load EQ presets from config."""
-    if PRESETS_FILE.exists():
-        return json.loads(PRESETS_FILE.read_text())
-    return {
-        "victor": {"chain": DEFAULT_PRESET_CHAIN},
-        "raw": {"chain": "loudnorm=I=-16:TP=-1.5:LRA=11"},
-        "none": {"chain": ""},
-    }
+    """Adapt shared presets to the temporary legacy dictionary interface."""
+    result = {}
+    for name, preset in audiochain.load_presets(CONFIG_DIR).items():
+        chain = preset.chain
+        if preset.loudness is not None:
+            target = preset.loudness
+            suffix = f"loudnorm=I={target.i}:TP={target.tp}:LRA={target.lra}"
+            chain = f"{chain},{suffix}" if chain else suffix
+        result[name] = {"description": preset.description, "chain": chain}
+    return result
 
 
 def get_eq_chain(preset: str, custom_eq: str | None) -> str:
-    """Resolve EQ filter chain from preset or custom override."""
     if custom_eq:
+        audiochain.validate_filter_chain(custom_eq)
+        audiochain.split_loudnorm(custom_eq)
         return custom_eq
     presets = load_presets()
     if preset not in presets:
-        raise click.ClickException(
-            f"Unknown preset '{preset}'. Available: {', '.join(presets.keys())}"
-        )
-    return presets[preset].get("chain", "")
+        raise DeclipError(f"Unknown preset '{preset}'. Available: {', '.join(presets)}")
+    return presets[preset]["chain"]
 
 
 # ── FFmpeg Command Building ────────────────────────────────
@@ -921,8 +768,16 @@ def build_cut_cmd(
             if eq_chain:
                 cmd += ["-af", eq_chain]
             cmd += [
-                "-c:v", "h264_videotoolbox", "-q:v", "65",
-                "-c:a", "aac_at", "-b:a", "192k", "-ar", "48000",
+                "-c:v",
+                "h264_videotoolbox",
+                "-q:v",
+                "65",
+                "-c:a",
+                "aac_at",
+                "-b:a",
+                "192k",
+                "-ar",
+                "48000",
             ]
         else:
             cmd += ["-ss", str(k.start), "-to", str(k.end)]
@@ -984,9 +839,7 @@ def _build_filtergraph_cmd(
                 f",afade=t=in:d={fade_dur:.4f}"
                 f",afade=t=out:st={fade_out_start:.4f}:d={fade_dur:.4f}"
             )
-        audio_parts.append(
-            f"{audio_chain}[a{i}]"
-        )
+        audio_parts.append(f"{audio_chain}[a{i}]")
         if has_vid:
             video_parts.append(
                 f"[0:v]trim=start={k.start:.3f}:end={k.end:.3f},setpts=PTS-STARTPTS[v{i}]"
@@ -1020,14 +873,31 @@ def _build_filtergraph_cmd(
 
     if has_vid:
         cmd += [
-            "-map", "[vout]", "-map", audio_out,
-            "-c:v", "h264_videotoolbox", "-q:v", "65",
-            "-c:a", "aac_at", "-b:a", "192k", "-ar", "48000",
+            "-map",
+            "[vout]",
+            "-map",
+            audio_out,
+            "-c:v",
+            "h264_videotoolbox",
+            "-q:v",
+            "65",
+            "-c:a",
+            "aac_at",
+            "-b:a",
+            "192k",
+            "-ar",
+            "48000",
         ]
     else:
         cmd += [
-            "-map", audio_out,
-            "-c:a", "aac_at", "-b:a", "192k", "-ar", "48000",
+            "-map",
+            audio_out,
+            "-c:a",
+            "aac_at",
+            "-b:a",
+            "192k",
+            "-ar",
+            "48000",
         ]
 
     cmd.append(str(output_path))
@@ -1053,7 +923,7 @@ def _build_segment_cmd(
     segment_files = []
     n = len(keeps)
     if not IS_TTY:
-        click.echo(f"  {_ACCENT}◐{_RESET} Cutting {n} segments...")
+        echo(f"  ◐ Cutting {n} segments...")
     milestones = {25, 50, 75, 100}
     for i, k in enumerate(keeps):
         seg_file = segments_dir / f"seg_{i:04d}.mp4"
@@ -1064,26 +934,36 @@ def _build_segment_cmd(
         af = None
         if fade_dur > 0:
             af = f"afade=t=in:d={fade_dur:.4f},afade=t=out:st={fade_out_start:.4f}:d={fade_dur:.4f}"
-        cmd = ["ffmpeg", "-y", "-v", "quiet",
-               "-i", str(input_path),
-               "-ss", str(k.start), "-t", str(seg_dur),
-               "-c:v", "h264_videotoolbox", "-q:v", "65"]
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-v",
+            "quiet",
+            "-i",
+            str(input_path),
+            "-ss",
+            str(k.start),
+            "-t",
+            str(seg_dur),
+            "-c:v",
+            "h264_videotoolbox",
+            "-q:v",
+            "65",
+        ]
         if af:
             cmd += ["-af", af]
         cmd += ["-c:a", "aac_at", "-b:a", "192k", str(seg_file)]
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
-            raise click.ClickException(f"Segment {i} extraction failed: {result.stderr.strip()}")
+            raise click.ClickException(
+                f"Segment {i} extraction failed: {result.stderr.strip()}"
+            )
         segment_files.append(seg_file)
-    if IS_TTY:
-        sys.stdout.write(f"\r\033[2K")
-        sys.stdout.flush()
 
     # Write concat demuxer file
     concat_file = tmp_dir / "concat.txt"
     with open(concat_file, "w") as f:
-        for seg in segment_files:
-            f.write(f"file '{seg}'\n")
+        f.writelines(f"file '{seg}'\n" for seg in segment_files)
 
     # Build concat + EQ command (per-segment fades already baked in)
     cmd = ["ffmpeg", "-y"]
@@ -1097,8 +977,18 @@ def _build_segment_cmd(
     if has_vid:
         # Segments already re-encoded to H.264 — concat can stream copy video
         if eq_chain:
-            cmd += ["-c:v", "copy", "-af", eq_chain,
-                    "-c:a", "aac_at", "-b:a", "192k", "-ar", "48000"]
+            cmd += [
+                "-c:v",
+                "copy",
+                "-af",
+                eq_chain,
+                "-c:a",
+                "aac_at",
+                "-b:a",
+                "192k",
+                "-ar",
+                "48000",
+            ]
         else:
             cmd += ["-c", "copy"]
     else:
@@ -1129,8 +1019,14 @@ def build_eq_only_cmd(
         if eq_chain:
             cmd += ["-af", eq_chain]
         cmd += [
-            "-c:v", "copy",
-            "-c:a", "aac_at", "-b:a", "192k", "-ar", "48000",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac_at",
+            "-b:a",
+            "192k",
+            "-ar",
+            "48000",
         ]
     else:
         if eq_chain:
@@ -1153,15 +1049,26 @@ def replace_audio_in_video(
     if not verbose:
         cmd += ["-v", "quiet", "-stats"]
     cmd += [
-        "-i", str(video_path),
-        "-i", str(audio_path),
-        "-map", "0:v", "-map", "1:a",
+        "-i",
+        str(video_path),
+        "-i",
+        str(audio_path),
+        "-map",
+        "0:v",
+        "-map",
+        "1:a",
     ]
     if eq_chain:
         cmd += ["-af", eq_chain]
     cmd += [
-        "-c:v", "copy",
-        "-c:a", "aac_at", "-b:a", "192k", "-ar", "48000",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac_at",
+        "-b:a",
+        "192k",
+        "-ar",
+        "48000",
     ]
     cmd.append(str(output_path))
     return cmd
@@ -1177,8 +1084,10 @@ def run_ffmpeg(cmd: list[str]):
         stderr = result.stderr.strip()
         # Extract the useful error line
         lines = stderr.split("\n")
-        error_lines = [l for l in lines if "error" in l.lower() or "Error" in l]
-        msg = error_lines[-1] if error_lines else lines[-1] if lines else "Unknown error"
+        error_lines = [line for line in lines if "error" in line.lower()]
+        msg = (
+            error_lines[-1] if error_lines else lines[-1] if lines else "Unknown error"
+        )
         raise click.ClickException(f"ffmpeg failed: {msg}")
 
 
@@ -1194,26 +1103,85 @@ def write_audit(record: dict):
 
 @click.group()
 @click.option("--execute", is_flag=True, help="Actually process (default is dry-run)")
-@click.option("--preset", "-p", default="victor", help="EQ preset: victor, podcast, raw, none")
-@click.option("--eq", "custom_eq", default=None, help="Custom ffmpeg audio filter chain")
-@click.option("--enhance/--no-enhance", default=False, help="Toggle Resemble Enhance (off by default, use --enhance for noisy sources)")
-@click.option("--margin", default=120, type=int, help="Safety margin around filler cuts (ms)")
+@click.option(
+    "--preset",
+    "-p",
+    default="raw",
+    help="EQ preset: voice, natural, podcast, raw, none",
+)
+@click.option(
+    "--eq", "custom_eq", default=None, help="Custom ffmpeg audio filter chain"
+)
+@click.option(
+    "--enhance/--no-enhance",
+    default=False,
+    help="Toggle enhancement (off by default, use --enhance for noisy sources)",
+)
+@click.option(
+    "--margin", default=120, type=int, help="Safety margin around filler cuts (ms)"
+)
 @click.option("--crossfade", default=20, type=int, help="Audio fade at cut points (ms)")
-@click.option("--model", default="mlx-community/whisper-large-v3-turbo", help="Whisper model")
+@click.option(
+    "--model", default="mlx-community/whisper-large-v3-turbo", help="Whisper model"
+)
 @click.option("--output", "-o", default=None, type=click.Path(), help="Output path")
-@click.option("--min-confidence", default=0.5, type=float, help="Whisper confidence threshold")
+@click.option(
+    "--min-confidence", default=0.5, type=float, help="Whisper confidence threshold"
+)
 @click.option("--verbose", "-v", is_flag=True, help="Verbose ffmpeg output")
-@click.option("--json-output", "json_out", is_flag=True, help="Machine-readable JSON output")
-@click.option("--max-gap", default=300, type=int, help="Compress word gaps longer than this (ms, 0=off)")
-@click.option("--retakes/--no-retakes", "remove_retakes", default=True, help="Toggle retake detection (on by default)")
-@click.option("--cut-range", multiple=True, help="Manual cut range as start-end in seconds (e.g. 570.5-695.9)")
-@click.option("--keep-transcript", is_flag=True, help="Save transcript JSON alongside output")
-@click.option("--cpu", is_flag=True, help="Force CPU for Resemble Enhance (avoids MPS crashes)")
-@click.option("--export", "export_fmt", type=click.Choice(["edl", "srt", "markers", "fcpxml"]), default=None, help="Export cut list for NLE (edl, srt, markers, fcpxml)")
+@click.option(
+    "--json-output", "json_out", is_flag=True, help="Machine-readable JSON output"
+)
+@click.option(
+    "--max-gap",
+    default=300,
+    type=int,
+    help="Compress word gaps longer than this (ms, 0=off)",
+)
+@click.option(
+    "--retakes/--no-retakes",
+    "remove_retakes",
+    default=True,
+    help="Toggle retake detection (on by default)",
+)
+@click.option(
+    "--cut-range",
+    multiple=True,
+    help="Manual cut range as start-end in seconds (e.g. 570.5-695.9)",
+)
+@click.option(
+    "--keep-transcript", is_flag=True, help="Save transcript JSON alongside output"
+)
+@click.option("--cpu", is_flag=True, help="Deprecated compatibility flag")
+@click.option(
+    "--export",
+    "export_fmt",
+    type=click.Choice(["edl", "srt", "markers", "fcpxml"]),
+    default=None,
+    help="Export cut list for NLE (edl, srt, markers, fcpxml)",
+)
 @click.pass_context
-def cli(ctx, execute, preset, custom_eq, enhance, margin,
-        crossfade, model, output, min_confidence, verbose, json_out, max_gap, remove_retakes, cut_range, keep_transcript, cpu, export_fmt):
-    """declip — Filler removal + Studio Sound + Voice EQ.
+def cli(
+    ctx,
+    execute,
+    preset,
+    custom_eq,
+    enhance,
+    margin,
+    crossfade,
+    model,
+    output,
+    min_confidence,
+    verbose,
+    json_out,
+    max_gap,
+    remove_retakes,
+    cut_range,
+    keep_transcript,
+    cpu,
+    export_fmt,
+):
+    """declip: filler removal and voice EQ.
 
     \b
     Usage:
@@ -1222,20 +1190,39 @@ def cli(ctx, execute, preset, custom_eq, enhance, margin,
       declip transcribe <file>         # Transcript only
       declip detect <file>             # Filler report
       declip clean <file> --execute    # Filler removal only
-      declip enhance <file> --execute  # Studio Sound only
+      declip enhance <file> --execute  # audio enhancement only
       declip config show               # View settings
     """
     ctx.ensure_object(dict)
     option_values = {
-        "execute": execute, "preset": preset, "custom_eq": custom_eq,
-        "enhance": enhance, "margin": margin, "crossfade": crossfade,
-        "model": model, "output": output, "min_confidence": min_confidence,
-        "verbose": verbose, "json_out": json_out, "max_gap": max_gap,
+        "execute": execute,
+        "preset": preset,
+        "custom_eq": custom_eq,
+        "enhance": enhance,
+        "margin": margin,
+        "crossfade": crossfade,
+        "model": model,
+        "output": output,
+        "min_confidence": min_confidence,
+        "verbose": verbose,
+        "json_out": json_out,
+        "max_gap": max_gap,
         "remove_retakes": remove_retakes,
-        "cut_range": cut_range, "keep_transcript": keep_transcript,
-        "cpu": cpu, "export_fmt": export_fmt,
+        "cut_range": cut_range,
+        "keep_transcript": keep_transcript,
+        "cpu": cpu,
+        "export_fmt": export_fmt,
     }
-    ctx.obj.update(resolve_config_defaults(ctx, option_values))
+    resolved = resolve_config_defaults(ctx, option_values)
+    if (
+        ctx.get_parameter_source("preset") == ParameterSource.DEFAULT
+        and resolved["preset"] not in load_presets()
+    ):
+        ui_warn(f"Unknown preset '{resolved['preset']}' in {CONFIG_FILE}; using raw")
+        resolved["preset"] = "raw"
+    if resolved["enhance"]:
+        raise DeclipError("enhancement is unavailable in this build")
+    ctx.obj.update(resolved)
 
 
 @cli.command()
@@ -1244,6 +1231,12 @@ def cli(ctx, execute, preset, custom_eq, enhance, margin,
 def process(ctx, input_file):
     """Full pipeline: transcribe → detect → cut → enhance → EQ."""
     opts = ctx.obj
+    if opts.get("enhance"):
+        raise DeclipError("enhancement is unavailable in this build")
+    if opts.get("execute") or opts.get("export_fmt"):
+        raise ReviewRequired(
+            "declip review is required; cut execution and export are unavailable until CLI integration"
+        )
     path = Path(input_file)
     info = probe_media(path)
 
@@ -1269,19 +1262,25 @@ def process(ctx, input_file):
         with Spinner(f"Transcribing with {opts['model'].split('/')[-1]}..."):
             t0 = time.time()
             transcript = transcribe(wav_path, opts["model"])
-        word_count = sum(len(s.get("words", [])) for s in transcript.get("segments", []))
+        word_count = sum(
+            len(s.get("words", [])) for s in transcript.get("segments", [])
+        )
         ui_done("Transcribed", f"{time.time() - t0:.1f}s · {word_count:,} words")
 
         # Step 3: Detect fillers
         with Spinner("Detecting fillers..."):
             fillers = load_fillers()
             filler_cuts = detect_fillers(
-                transcript, fillers,
+                transcript,
+                fillers,
                 min_confidence=opts["min_confidence"],
                 margin_ms=opts["margin"],
             )
         if filler_cuts:
-            ui_done(f"{len(filler_cuts)} fillers found", f"{sum(c.end - c.start for c in filler_cuts):.1f}s")
+            ui_done(
+                f"{len(filler_cuts)} fillers found",
+                f"{sum(c.end - c.start for c in filler_cuts):.1f}s",
+            )
         else:
             ui_done("No fillers detected")
 
@@ -1291,7 +1290,10 @@ def process(ctx, input_file):
             with Spinner(f"Compressing gaps >{opts['max_gap']}ms..."):
                 gap_cuts = detect_gaps(transcript, max_gap_ms=opts["max_gap"])
             if gap_cuts:
-                ui_done(f"{len(gap_cuts)} gaps compressed", f"{sum(c.end - c.start for c in gap_cuts):.1f}s")
+                ui_done(
+                    f"{len(gap_cuts)} gaps compressed",
+                    f"{sum(c.end - c.start for c in gap_cuts):.1f}s",
+                )
             else:
                 ui_done("No oversized gaps")
 
@@ -1301,7 +1303,10 @@ def process(ctx, input_file):
             with Spinner("Detecting retakes..."):
                 retake_cuts = detect_retakes(transcript)
             if retake_cuts:
-                ui_done(f"{len(retake_cuts)} retakes found", f"{sum(c.end - c.start for c in retake_cuts):.1f}s")
+                ui_done(
+                    f"{len(retake_cuts)} retakes found",
+                    f"{sum(c.end - c.start for c in retake_cuts):.1f}s",
+                )
             else:
                 ui_done("No retakes detected")
         else:
@@ -1312,15 +1317,21 @@ def process(ctx, input_file):
         for cr in opts.get("cut_range", []):
             try:
                 start_s, end_s = cr.split("-", 1)
-                manual_cuts.append(CutRegion(
-                    start=float(start_s), end=float(end_s),
-                    word=f"manual cut ({float(end_s) - float(start_s):.1f}s)",
-                    confidence=1.0,
-                ))
+                manual_cuts.append(
+                    CutRegion(
+                        start=float(start_s),
+                        end=float(end_s),
+                        word=f"manual cut ({float(end_s) - float(start_s):.1f}s)",
+                        confidence=1.0,
+                    )
+                )
             except ValueError:
                 ui_warn(f"Invalid cut range: {cr} (expected start-end)")
         if manual_cuts:
-            ui_done(f"{len(manual_cuts)} manual cuts", f"{sum(c.end - c.start for c in manual_cuts):.1f}s")
+            ui_done(
+                f"{len(manual_cuts)} manual cuts",
+                f"{sum(c.end - c.start for c in manual_cuts):.1f}s",
+            )
 
         # Merge all cuts
         all_cuts = filler_cuts + gap_cuts + retake_cuts + manual_cuts
@@ -1332,8 +1343,14 @@ def process(ctx, input_file):
             keeps_for_export = invert_cuts(cuts, duration)
             fps = get_video_fps(info) if has_video(info) else 30.0
             out = do_export(
-                opts["export_fmt"], cuts, keeps_for_export, duration, path, fps,
-                transcript=transcript, info=info,
+                opts["export_fmt"],
+                cuts,
+                keeps_for_export,
+                duration,
+                path,
+                fps,
+                transcript=transcript,
+                info=info,
             )
             ui_done(f"Exported {opts['export_fmt'].upper()}", str(out.name))
 
@@ -1346,7 +1363,11 @@ def process(ctx, input_file):
             return
 
         # Step 4: Execute cuts
-        output_path = Path(opts["output"]) if opts["output"] else path.with_stem(f"{path.stem}_clean")
+        output_path = (
+            Path(opts["output"])
+            if opts["output"]
+            else path.with_stem(f"{path.stem}_clean")
+        )
 
         if cuts:
             with Spinner(f"Applying {len(cuts)} edits..."):
@@ -1354,8 +1375,13 @@ def process(ctx, input_file):
                 keeps = invert_cuts(cuts, duration)
                 cut_output = tmp_dir / f"cut{path.suffix}"
                 cmd = build_cut_cmd(
-                    path, cut_output, keeps, "",
-                    is_video, opts["crossfade"], opts["verbose"],
+                    path,
+                    cut_output,
+                    keeps,
+                    "",
+                    is_video,
+                    opts["crossfade"],
+                    opts["verbose"],
                 )
                 run_ffmpeg(cmd)
             ui_done(f"Applied {len(cuts)} edits", f"{time.time() - t0:.1f}s")
@@ -1364,9 +1390,9 @@ def process(ctx, input_file):
             ui_done("No edits to apply")
             working_file = path
 
-        # Step 4: Enhance (Studio Sound)
+        # Step 4: Enhance (audio enhancement)
         if opts["enhance"]:
-            with Spinner("Enhancing audio (Studio Sound)..."):
+            with Spinner("Enhancing audio (audio enhancement)..."):
                 t0 = time.time()
                 full_wav = extract_audio_fullrate(working_file, tmp_dir)
                 enhanced_wav = tmp_dir / "enhanced.wav"
@@ -1379,7 +1405,11 @@ def process(ctx, input_file):
                 if is_video:
                     enhanced_output = tmp_dir / f"enhanced{path.suffix}"
                     cmd = replace_audio_in_video(
-                        working_file, enhanced_wav, enhanced_output, eq_chain, opts["verbose"]
+                        working_file,
+                        enhanced_wav,
+                        enhanced_output,
+                        eq_chain,
+                        opts["verbose"],
                     )
                     run_ffmpeg(cmd)
                     working_file = enhanced_output
@@ -1404,39 +1434,51 @@ def process(ctx, input_file):
                     )
                     run_ffmpeg(cmd)
                     working_file = eq_output
-                ui_done("EQ applied", f"{time.time() - t0:.1f}s · preset: {opts['preset']}")
+                ui_done(
+                    "EQ applied", f"{time.time() - t0:.1f}s · preset: {opts['preset']}"
+                )
 
         # Finalize
         with Spinner("Finalizing..."):
-            subprocess.run(["cp", str(working_file), str(output_path)], check=True)
+            copy_media(working_file, output_path)
 
         # Save transcript if requested
         if opts["keep_transcript"]:
             t_path = output_path.with_suffix(".transcript.json")
             t_path.write_text(json.dumps(transcript, indent=2, default=str))
-            ui_done(f"Transcript saved", t_path.name)
+            ui_done("Transcript saved", t_path.name)
 
         # Audit
-        write_audit({
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "input": str(path),
-            "output": str(output_path),
-            "model": opts["model"],
-            "fillers_detected": len(filler_cuts),
-            "gaps_compressed": len(gap_cuts),
-            "retakes_removed": len(retake_cuts),
-            "manual_cuts": len(manual_cuts),
-            "cuts_applied": len(cuts),
-            "time_removed_sec": round(total_cut, 3),
-            "original_duration_sec": round(duration, 1),
-            "preset": opts["preset"],
-            "enhanced": opts["enhance"],
-            "version": VERSION,
-        })
+        write_audit(
+            {
+                "timestamp": datetime.now(UTC).isoformat(),
+                "input": str(path),
+                "output": str(output_path),
+                "model": opts["model"],
+                "fillers_detected": len(filler_cuts),
+                "gaps_compressed": len(gap_cuts),
+                "retakes_removed": len(retake_cuts),
+                "manual_cuts": len(manual_cuts),
+                "cuts_applied": len(cuts),
+                "time_removed_sec": round(total_cut, 3),
+                "original_duration_sec": round(duration, 1),
+                "preset": opts["preset"],
+                "enhanced": opts["enhance"],
+                "version": VERSION,
+            }
+        )
 
         new_duration = duration - total_cut
-        ui_result(output_path, duration, new_duration, len(cuts), total_cut, opts["preset"], opts["enhance"])
-        click.echo()
+        ui_result(
+            output_path,
+            duration,
+            new_duration,
+            len(cuts),
+            total_cut,
+            opts["preset"],
+            opts["enhance"],
+        )
+        echo()
 
 
 @cli.command()
@@ -1454,64 +1496,8 @@ def clean(ctx, input_file):
 @click.argument("input_file", type=click.Path(exists=True))
 @click.pass_context
 def enhance_cmd(ctx, input_file):
-    """Studio Sound enhancement + EQ only (no filler removal)."""
-    opts = ctx.obj
-    path = Path(input_file)
-    info = probe_media(path)
-
-    if not has_audio(info):
-        raise click.ClickException("No audio stream found")
-
-    duration = get_duration(info)
-    is_video = has_video(info)
-    eq_chain = get_eq_chain(opts["preset"], opts["custom_eq"])
-
-    click.echo(f"\n  Input:    {path.name}")
-    click.echo(f"  Duration: {duration:.1f}s")
-
-    if not opts["execute"]:
-        click.echo(f"\n  Would apply:")
-        click.echo(f"    Enhancement: Resemble Enhance (Studio Sound)")
-        click.echo(f"    EQ preset:   {opts['preset']}")
-        click.echo(f"\n  Pass --execute to process.\n")
-        return
-
-    output_path = Path(opts["output"]) if opts["output"] else path.with_stem(f"{path.stem}_clean")
-
-    with tempfile.TemporaryDirectory(prefix="declip_") as tmp:
-        tmp_dir = Path(tmp)
-
-        click.echo("  [1/2] Enhancing audio (Studio Sound)...")
-        full_wav = extract_audio_fullrate(path, tmp_dir)
-        enhanced_wav = tmp_dir / "enhanced.wav"
-        enhance_audio(full_wav, enhanced_wav, force_cpu=opts.get("cpu", False))
-
-        click.echo("  [2/2] Applying EQ + finalizing...")
-        if is_video:
-            cmd = replace_audio_in_video(
-                path, enhanced_wav, output_path, eq_chain, opts["verbose"]
-            )
-            run_ffmpeg(cmd)
-        else:
-            if eq_chain:
-                cmd = build_eq_only_cmd(
-                    enhanced_wav, output_path, eq_chain, False, opts["verbose"]
-                )
-                run_ffmpeg(cmd)
-            else:
-                subprocess.run(["cp", str(enhanced_wav), str(output_path)], check=True)
-
-        write_audit({
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "input": str(path),
-            "output": str(output_path),
-            "enhanced": True,
-            "preset": opts["preset"],
-            "version": VERSION,
-        })
-
-        click.echo(f"\n  Done. {path.name} → {output_path.name}")
-        click.echo(f"  Studio Sound + EQ ({opts['preset']}) applied\n")
+    """audio enhancement enhancement + EQ only (no filler removal)."""
+    raise DeclipError("enhancement is unavailable in this build")
 
 
 @cli.command("transcribe")
@@ -1535,10 +1521,11 @@ def transcribe_cmd(ctx, input_file):
         with Spinner(f"Transcribing with {ctx.obj['model'].split('/')[-1]}..."):
             t0 = time.time()
             transcript = transcribe(wav_path, ctx.obj["model"])
-        word_count = sum(len(s.get("words", [])) for s in transcript.get("segments", []))
+        word_count = sum(
+            len(s.get("words", [])) for s in transcript.get("segments", [])
+        )
         ui_done("Transcribed", f"{time.time() - t0:.1f}s · {word_count:,} words")
 
-    click.echo()
     click.echo(json.dumps(transcript, indent=2, default=str))
 
 
@@ -1548,6 +1535,12 @@ def transcribe_cmd(ctx, input_file):
 def detect_cmd(ctx, input_file):
     """Detect fillers and show report."""
     opts = ctx.obj
+    if opts.get("enhance"):
+        raise DeclipError("enhancement is unavailable in this build")
+    if opts.get("execute") or opts.get("export_fmt"):
+        raise ReviewRequired(
+            "declip review is required; cut execution and export are unavailable until CLI integration"
+        )
     path = Path(input_file)
     info = probe_media(path)
     if not has_audio(info):
@@ -1561,7 +1554,8 @@ def detect_cmd(ctx, input_file):
 
     fillers = load_fillers()
     filler_cuts = detect_fillers(
-        transcript, fillers,
+        transcript,
+        fillers,
         min_confidence=opts["min_confidence"],
         margin_ms=opts["margin"],
     )
@@ -1571,8 +1565,14 @@ def detect_cmd(ctx, input_file):
         keeps_for_export = invert_cuts(cuts, duration)
         fps = get_video_fps(info) if has_video(info) else 30.0
         out = do_export(
-            opts["export_fmt"], cuts, keeps_for_export, duration, path, fps,
-            transcript=transcript, info=info,
+            opts["export_fmt"],
+            cuts,
+            keeps_for_export,
+            duration,
+            path,
+            fps,
+            transcript=transcript,
+            info=info,
         )
         ui_done(f"Exported {opts['export_fmt'].upper()}", str(out.name))
 
@@ -1591,7 +1591,14 @@ cli.add_command(enhance_cmd, "enhance")
 
 def get_video_fps(info: dict) -> float:
     """Extract framerate from probe info."""
-    vstream = next((s for s in info.get("streams", []) if s.get("codec_type") == "video" and s.get("codec_name") != "mjpeg"), None)
+    vstream = next(
+        (
+            s
+            for s in info.get("streams", [])
+            if s.get("codec_type") == "video" and s.get("codec_name") != "mjpeg"
+        ),
+        None,
+    )
     if not vstream:
         return 30.0
     rate = vstream.get("r_frame_rate", "30/1")
@@ -1619,7 +1626,14 @@ def _srt_tc(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
-def export_edl(cuts: list[CutRegion], keeps: list[KeepRegion], duration: float, input_path: Path, fps: float, **kw) -> str:
+def export_edl(
+    cuts: list[CutRegion],
+    keeps: list[KeepRegion],
+    duration: float,
+    input_path: Path,
+    fps: float,
+    **kw,
+) -> str:
     """Export CMX 3600 EDL for DaVinci Resolve / Premiere."""
     lines = [
         f"TITLE: {input_path.stem} declip cut list",
@@ -1632,7 +1646,9 @@ def export_edl(cuts: list[CutRegion], keeps: list[KeepRegion], duration: float, 
         src_out = _tc(k.end, fps)
         rec_in = _tc(record_offset, fps)
         rec_out = _tc(record_offset + (k.end - k.start), fps)
-        lines.append(f"{i + 1:03d}  AX       AA/V  C        {src_in} {src_out} {rec_in} {rec_out}")
+        lines.append(
+            f"{i + 1:03d}  AX       AA/V  C        {src_in} {src_out} {rec_in} {rec_out}"
+        )
         record_offset += k.end - k.start
     lines.append("")
     return "\n".join(lines)
@@ -1661,21 +1677,36 @@ def export_markers(cuts: list[CutRegion], **kw) -> str:
     color_map = {"gap": "#FFB800", "retake": "#FF6B00"}
     markers = []
     for c in cuts:
-        cut_type = "gap" if c.word.startswith("gap") else ("retake" if "retake" in c.word else "filler")
-        markers.append({
-            "time_ms": int(c.start * 1000),
-            "duration_ms": int((c.end - c.start) * 1000),
-            "type": cut_type,
-            "label": c.word,
-            "color": color_map.get(cut_type, "#FF0000"),
-        })
+        cut_type = (
+            "gap"
+            if c.word.startswith("gap")
+            else ("retake" if "retake" in c.word else "filler")
+        )
+        markers.append(
+            {
+                "time_ms": int(c.start * 1000),
+                "duration_ms": int((c.end - c.start) * 1000),
+                "type": cut_type,
+                "label": c.word,
+                "color": color_map.get(cut_type, "#FF0000"),
+            }
+        )
     output = {"version": "1.0", "source": "declip", "markers": markers}
     return json.dumps(output, indent=2)
 
 
-def export_fcpxml(keeps: list[KeepRegion], input_path: Path, fps: float, info: dict, **kw) -> str:
+def export_fcpxml(
+    keeps: list[KeepRegion], input_path: Path, fps: float, info: dict, **kw
+) -> str:
     """Export FCPXML v1.11 for Final Cut Pro."""
-    vstream = next((s for s in info.get("streams", []) if s.get("codec_type") == "video" and s.get("codec_name") != "mjpeg"), None)
+    vstream = next(
+        (
+            s
+            for s in info.get("streams", [])
+            if s.get("codec_type") == "video" and s.get("codec_name") != "mjpeg"
+        ),
+        None,
+    )
     w = vstream.get("width", 1920) if vstream else 1920
     h = vstream.get("height", 1080) if vstream else 1080
     total_dur = sum(k.end - k.start for k in keeps)
@@ -1722,9 +1753,16 @@ def export_fcpxml(keeps: list[KeepRegion], input_path: Path, fps: float, info: d
 </fcpxml>"""
 
 
-def do_export(fmt: str, cuts: list[CutRegion], keeps: list[KeepRegion],
-              duration: float, input_path: Path, fps: float,
-              transcript: dict = None, info: dict = None):
+def do_export(
+    fmt: str,
+    cuts: list[CutRegion],
+    keeps: list[KeepRegion],
+    duration: float,
+    input_path: Path,
+    fps: float,
+    transcript: dict = None,
+    info: dict = None,
+):
     """Dispatch export to the right format and write to disk."""
     exporters = {
         "edl": export_edl,
@@ -1735,9 +1773,13 @@ def do_export(fmt: str, cuts: list[CutRegion], keeps: list[KeepRegion],
     ext_map = {"edl": ".edl", "srt": ".srt", "markers": ".json", "fcpxml": ".fcpxml"}
 
     content = exporters[fmt](
-        cuts=cuts, keeps=keeps, duration=duration,
-        input_path=input_path, fps=fps,
-        transcript=transcript or {}, info=info or {},
+        cuts=cuts,
+        keeps=keeps,
+        duration=duration,
+        input_path=input_path,
+        fps=fps,
+        transcript=transcript or {},
+        info=info or {},
     )
     out_path = input_path.with_suffix(ext_map[fmt])
     out_path.write_text(content)
@@ -1752,55 +1794,23 @@ CONFIG_KEY_ALIASES = {
     "max_gap_ms": "max_gap",
 }
 
-DEFAULT_CONFIG = {
-    "version": 2,
-    "defaults": {
-        "preset": "victor",
-        "margin": 120,
-        "max_gap": 300,
-        "min_confidence": 0.5,
-        "enhance": False,
-        "cpu": False,
-        "remove_retakes": True,
-    }
-}
+DEFAULT_CONFIG = user_config.DEFAULT_CONFIG
 
 
 def default_config() -> dict:
-    """Return a fresh copy of the default config."""
-    return {"version": DEFAULT_CONFIG["version"], "defaults": DEFAULT_CONFIG["defaults"].copy()}
+    return user_config.default_config()
 
 
 def normalize_config(config: dict | None) -> dict:
-    """Normalize config structure and migrate legacy keys."""
-    normalized = default_config()
-    if not config:
-        return normalized
-
-    defaults = dict(config.get("defaults", {}))
-    for legacy_key, canonical_key in CONFIG_KEY_ALIASES.items():
-        if legacy_key in defaults and canonical_key not in defaults:
-            defaults[canonical_key] = defaults.pop(legacy_key)
-
-    normalized["version"] = max(int(config.get("version", 0) or 0), DEFAULT_CONFIG["version"])
-    normalized["defaults"].update(defaults)
-    return normalized
+    return user_config.normalize_config(config)
 
 
 def load_config() -> dict:
-    """Load config.json, falling back to defaults."""
-    if CONFIG_FILE.exists():
-        try:
-            return normalize_config(json.loads(CONFIG_FILE.read_text()))
-        except (json.JSONDecodeError, KeyError):
-            return default_config()
-    return default_config()
+    return user_config.load_config()
 
 
 def save_config(config: dict):
-    """Write config.json."""
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(normalize_config(config), indent=2) + "\n")
+    user_config.save_config(config)
 
 
 def resolve_config_defaults(ctx: click.Context, option_values: dict) -> dict:
@@ -1820,7 +1830,6 @@ def resolve_config_defaults(ctx: click.Context, option_values: dict) -> dict:
 @cli.group()
 def config():
     """Manage declip configuration and presets."""
-    pass
 
 
 @config.command("show")
@@ -1833,7 +1842,7 @@ def config_show():
         try:
             raw_defaults = json.loads(CONFIG_FILE.read_text()).get("defaults", {})
             saved_keys = {CONFIG_KEY_ALIASES.get(key, key) for key in raw_defaults}
-        except (json.JSONDecodeError, AttributeError):
+        except (json.JSONDecodeError, AttributeError, TypeError):
             saved_keys = set()
 
     if IS_TTY:
@@ -1841,7 +1850,7 @@ def config_show():
             title=f"[accent]{MARK}[/accent] [bold]declip config[/bold]",
             box=box.ROUNDED,
             border_style="accent",
-            header_style="bold dodger_blue2",
+            header_style="stat",
             row_styles=["", "dim"],
         )
         table.add_column("Setting", style="bold")
@@ -1857,11 +1866,11 @@ def config_show():
         console.print(table)
         console.print()
     else:
-        click.echo("\n  declip config\n")
+        echo("\n  declip config\n")
         for key, default_val in DEFAULT_CONFIG["defaults"].items():
             val = defaults.get(key, default_val)
-            click.echo(f"  {key}: {val}")
-        click.echo()
+            echo(f"  {key}: {val}")
+        echo()
 
 
 @config.command("set")
@@ -1874,7 +1883,9 @@ def config_set(key, value):
     key = CONFIG_KEY_ALIASES.get(key, key)
 
     if key not in DEFAULT_CONFIG["defaults"]:
-        raise click.ClickException(f"Unknown setting: {key}. Available: {', '.join(DEFAULT_CONFIG['defaults'].keys())}")
+        raise click.ClickException(
+            f"Unknown setting: {key}. Available: {', '.join(DEFAULT_CONFIG['defaults'].keys())}"
+        )
 
     # Type coerce based on default
     default_val = DEFAULT_CONFIG["defaults"][key]
@@ -1900,7 +1911,7 @@ def config_presets():
             title=f"[accent]{MARK}[/accent] [bold]EQ Presets[/bold]",
             box=box.ROUNDED,
             border_style="accent",
-            header_style="bold dodger_blue2",
+            header_style="stat",
             row_styles=["", "dim"],
         )
         table.add_column("Name", style="bold")
@@ -1916,11 +1927,11 @@ def config_presets():
         console.print(table)
         console.print()
     else:
-        click.echo("\n  EQ Presets\n")
+        echo("\n  EQ Presets\n")
         for name, data in presets.items():
             desc = data.get("description", "")
-            click.echo(f"  {name}: {desc}")
-        click.echo()
+            echo(f"  {name}: {desc}")
+        echo()
 
 
 @config.command("preset-add")
@@ -1929,10 +1940,16 @@ def config_presets():
 @click.option("--description", prompt="Preset description")
 def config_preset_add(name, chain, description):
     """Add or update an EQ preset."""
-    presets = load_presets()
+    audiochain.validate_filter_chain(chain)
+    audiochain.split_loudnorm(chain)
+    presets = (
+        json.loads(PRESETS_FILE.read_text(encoding="utf-8"))
+        if PRESETS_FILE.exists()
+        else {}
+    )
     presets[name] = {"description": description, "chain": chain}
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    PRESETS_FILE.write_text(json.dumps(presets, indent=2) + "\n")
+    atomic_write_json(PRESETS_FILE, presets)
     ui_done(f"Preset '{name}' saved")
 
 
@@ -1940,11 +1957,15 @@ def config_preset_add(name, chain, description):
 @click.argument("name")
 def config_preset_rm(name):
     """Remove an EQ preset."""
-    presets = load_presets()
+    presets = (
+        json.loads(PRESETS_FILE.read_text(encoding="utf-8"))
+        if PRESETS_FILE.exists()
+        else {}
+    )
     if name not in presets:
         raise click.ClickException(f"Preset '{name}' not found")
     del presets[name]
-    PRESETS_FILE.write_text(json.dumps(presets, indent=2) + "\n")
+    atomic_write_json(PRESETS_FILE, presets)
     ui_done(f"Preset '{name}' removed")
 
 
@@ -1953,11 +1974,13 @@ def config_fillers():
     """Show filler word list."""
     fillers = load_fillers()
     if IS_TTY:
-        console.print(f"\n  [accent]{MARK}[/accent] [bold]Filler words[/bold] ({len(fillers)} total)\n")
+        console.print(
+            f"\n  [accent]{MARK}[/accent] [bold]Filler words[/bold] ({len(fillers)} total)\n"
+        )
         console.print(f"  {', '.join(sorted(fillers))}\n")
     else:
-        click.echo(f"\n  Filler words ({len(fillers)} total)\n")
-        click.echo(f"  {', '.join(sorted(fillers))}\n")
+        echo(f"\n  Filler words ({len(fillers)} total)\n")
+        echo(f"  {', '.join(sorted(fillers))}\n")
 
 
 @config.command("filler-add")

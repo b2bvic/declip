@@ -8,3 +8,6 @@ concat.txt
 .venv/
 .pytest_cache/
 .ruff_cache/
+dist/
+*.egg-info/
+build/

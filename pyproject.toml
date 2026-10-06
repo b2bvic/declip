@@ -1,0 +1,34 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "declip"
+version = "0.5.0"
+description = "Local filler, gap, and retake cutting for talking-head video, with a review page."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = ["click>=8.1", "rich>=13.7", "platformdirs>=4"]
+
+[project.optional-dependencies]
+mac = ["mlx-whisper>=0.4.3; sys_platform == 'darwin' and platform_machine == 'arm64'"]
+cpu = ["faster-whisper>=1.2.1"]
+cuda = ["faster-whisper>=1.2.1", "nvidia-cublas-cu12; sys_platform != 'darwin'", "nvidia-cudnn-cu12>=9,<10; sys_platform != 'darwin'"]
+dev = ["pytest", "ruff", "pip-audit", "pyyaml"]
+
+[project.scripts]
+declip = "declip.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/declip"]
+
+[tool.ruff]
+target-version = "py311"
+
+[tool.pytest.ini_options]
+markers = ["ffmpeg", "extra(name)", "hwenc(name)", "slow", "contract"]
+
+[tool.ruff.lint]
+# Freeze the rule set required by the spec across Ruff default changes.
+select = ["E4", "E7", "E9", "F"]
