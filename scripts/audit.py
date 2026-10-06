@@ -14,6 +14,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+from declip import __version__
 from declip.fsutil import atomic_write_json
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -122,7 +123,7 @@ def write_index(directory: Path, fingerprint: str) -> None:
             if all(r["release_verdict"] == "clean" for r in receipts)
             else "held",
             "limits": [
-                "Windows is deferred and has no audit in 0.5.0.",
+                f"Windows is deferred and has no audit in {__version__}.",
                 "Requirements are resolved from pyproject.toml, not exported from uv.lock.",
                 "The mac extra targets macOS 14.0, matching the minimum of the locked MLX and Torch wheels.",
                 "The cpu extra targets macOS 13.0; Linux targets x86_64 glibc.",

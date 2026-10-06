@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.1
+
+### Fix real-footage results
+
+- Report real-speech prompt probes as passed, failed, or inconclusive in the receipt.
+- A no-prompt baseline with zero fillers is inconclusive and leaves the synthetic prompt-mode decision unchanged.
+- Keep transcription backend diagnostics off stdout in JSON modes, including language detection. Human-readable output stays unchanged.
+- Update versioned Git install commands to `v0.5.1`.
+
 ## 0.5.0
 
 ### Change your install and workflow

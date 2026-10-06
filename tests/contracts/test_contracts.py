@@ -734,7 +734,7 @@ def test_invalid_edit_list_data_raises_contract_error():
 # Literal JSON examples from the approved spec, independent of serializer output.
 EDIT_LIST_EXAMPLE = {
     "schema_version": 3,
-    "declip_version": "0.5.0",
+    "declip_version": "0.5.1",
     "source": {
         "path": "/abs/clip.mp4",
         "name": "clip.mp4",

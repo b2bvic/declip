@@ -1,6 +1,6 @@
 # Platform setup
 
-Use macOS or Linux for version 0.5.0.
+Use macOS or Linux for version 0.5.1.
 Windows is planned for a later release and is untested.
 Linux with NVIDIA is assumed, not verified.
 No Linux hardware receipt exists.
@@ -55,7 +55,7 @@ Check `nvidia-smi` and `declip doctor --json` before your first run.
 An explicit `--device cuda` fails if CUDA is unavailable.
 Use `--device cpu` with a CPU backend when you choose to run on CPU.
 
-Windows CUDA DLL loading is outside version 0.5.0.
+Windows CUDA DLL loading is outside version 0.5.1.
 Do not interpret wheel availability as Windows support.
 
 ## Review a remote run
@@ -97,7 +97,7 @@ P6 inspected the [DeepFilterNet v0.5.6 assets](https://github.com/Rikorose/DeepF
 | Linux x86_64 | `deep-filter-0.5.6-x86_64-unknown-linux-musl` | Asset verified; execution assumed |
 | Linux aarch64 | `deep-filter-0.5.6-aarch64-unknown-linux-gnu` | Asset verified; execution assumed |
 | Linux armv7 | `deep-filter-0.5.6-armv7-unknown-linux-gnueabihf` | Asset verified; execution assumed |
-| Windows | Release asset exists | Unavailable in 0.5.0; planned and untested |
+| Windows | Release asset exists | Unavailable in 0.5.1; planned and untested |
 | Other combinations | No selected asset | Unavailable; use `afftdn` |
 
 Strength maps from zero to one onto `--atten-lim-db` from zero to one hundred dB.

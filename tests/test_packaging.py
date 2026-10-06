@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_project_version_matches_package():
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert project["project"]["version"] == __version__ == "0.5.0"
+    assert project["project"]["version"] == __version__ == "0.5.1"
     assert project["project"]["scripts"] == {"declip": "declip.cli:main"}
 
 
@@ -39,5 +39,5 @@ def test_wheel_contains_package_resources(tmp_path):
             member = f"declip/review/static/{name}"
             assert wheel.read(member) == (ROOT / "src" / member).read_bytes()
             assert len(wheel.read(member)) > 100
-        entry_points = wheel.read("declip-0.5.0.dist-info/entry_points.txt").decode()
+        entry_points = wheel.read("declip-0.5.1.dist-info/entry_points.txt").decode()
         assert "declip = declip.cli:main" in entry_points

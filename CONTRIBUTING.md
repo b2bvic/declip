@@ -86,7 +86,7 @@ GitHub lists `uv` in its [supported ecosystem table](https://docs.github.com/en/
 Keep every workflow action pinned to a forty-character commit SHA.
 Keep top-level workflow permissions at `contents: read`.
 Run `tests/test_workflows.py` before changing CI.
-Version 0.5.0 has no package publication workflow.
+Version 0.5.1 has no package publication workflow.
 
 ## Document evidence
 

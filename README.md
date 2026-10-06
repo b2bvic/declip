@@ -10,14 +10,14 @@ Your source stays unchanged.
 ## Install
 
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/), Python 3.11 or later, and `ffmpeg` with `ffprobe`.
-Use the Git URL for version 0.5.0.
+Use the Git URL for version 0.5.1.
 You cannot install this version from PyPI.
 
 On macOS 14 or later with Apple silicon:
 
 ```bash
 brew install ffmpeg
-uv tool install "declip[mac] @ git+https://github.com/b2bvic/declip@v0.5.0"
+uv tool install "declip[mac] @ git+https://github.com/b2bvic/declip@v0.5.1"
 ```
 
 On Linux with NVIDIA hardware (assumed, not verified):
@@ -25,13 +25,13 @@ On Linux with NVIDIA hardware (assumed, not verified):
 ```bash
 sudo apt-get update
 sudo apt-get install -y ffmpeg
-uv tool install "declip[cuda] @ git+https://github.com/b2bvic/declip@v0.5.0"
+uv tool install "declip[cuda] @ git+https://github.com/b2bvic/declip@v0.5.1"
 ```
 
 For CPU transcription on macOS or Linux:
 
 ```bash
-uv tool install "declip[cpu] @ git+https://github.com/b2bvic/declip@v0.5.0"
+uv tool install "declip[cpu] @ git+https://github.com/b2bvic/declip@v0.5.1"
 ```
 
 Run `uv tool update-shell` if your shell cannot find `declip`.
@@ -39,7 +39,7 @@ Run `declip doctor` to check tools and backends.
 For a machine used only for review, render, or export, install the core package without an extra:
 
 ```bash
-uv tool install "declip @ git+https://github.com/b2bvic/declip@v0.5.0"
+uv tool install "declip @ git+https://github.com/b2bvic/declip@v0.5.1"
 ```
 
 Windows is planned for a later release and is untested.

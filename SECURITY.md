@@ -27,7 +27,7 @@ It does not prove absence of vulnerabilities or native hardware support.
 Review dependency fixes and rerun all supported audits before marking the index clean.
 CI fails when an audit finds an advisory or cannot scan every resolved package.
 
-Windows has no audit in 0.5.0 because support is planned for a later release and is untested.
+Windows has no audit in 0.5.1 because support is planned for a later release and is untested.
 Linux with NVIDIA remains assumed, not verified, even though its dependency scan is clean.
 
 ## Understand the review server

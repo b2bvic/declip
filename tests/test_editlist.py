@@ -108,7 +108,7 @@ def test_cut_id_uses_enum_value_and_six_decimals():
 
 
 def test_schema3_round_trip_new_plan_and_revision(plan, tmp_path):
-    assert plan.schema_version == 3 and plan.declip_version == "0.5.0"
+    assert plan.schema_version == 3 and plan.declip_version == "0.5.1"
     assert plan.source.name == "source.mp4" and plan.source.size == 16
     assert plan.review == Review(ReviewState.PENDING, None, None, None)
     assert plan.history[0]["stage"] == "plan"
@@ -503,7 +503,7 @@ def test_migration_field_by_field_and_original_unchanged(schema2):
     assert calls == ["natural"]
     assert result.source.path == data["source"]["path"]
     assert result.source.size == 16 and result.source.name == "source.mp4"
-    assert result.schema_version == 3 and result.declip_version == "0.5.0"
+    assert result.schema_version == 3 and result.declip_version == "0.5.1"
     assert result.transcript.backend == "mlx" and result.transcript.language == "en"
     assert (
         result.transcript.prompt is None and result.transcript.model == "fixture-model"

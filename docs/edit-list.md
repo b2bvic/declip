@@ -10,7 +10,7 @@ Render and export consume the same file after review.
 | Field | Contents |
 |---|---|
 | `schema_version` | `3` |
-| `declip_version` | `0.5.0` for newly planned lists |
+| `declip_version` | `0.5.1` for newly planned lists |
 | `source` | Resolved `path`, filename `name`, byte `size`, full-file `sha256` |
 | `media` | Duration, start time, container, selected stream indices, frame rate, VFR, dimensions, rotation, codec, bit depth, color, audio streams, dropped streams |
 | `rig` | Name, tier, and resolved profile snapshot; null name/tier if absent |

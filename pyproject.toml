@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "declip"
-version = "0.5.0"
+version = "0.5.1"
 description = "Local filler, gap, and retake cutting for talking-head video, with a review page."
 readme = "README.md"
 license = "MIT"
