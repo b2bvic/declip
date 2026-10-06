@@ -1,0 +1,13 @@
+{
+  "format": {"duration": "10", "format_name": "matroska"},
+  "streams": [
+    {"index": 0, "codec_type": "video", "disposition": {"attached_pic": 1}},
+    {"index": 1, "codec_type": "audio", "codec_name": "aac", "sample_rate": "44100", "channels": 1, "channel_layout": "mono", "disposition": {"default": 0}, "tags": {"language": "eng"}},
+    {"index": 2, "codec_type": "video", "codec_name": "h264", "pix_fmt": "yuv420p", "avg_frame_rate": "30/1", "r_frame_rate": "30/1"},
+    {"index": 3, "codec_type": "audio", "codec_name": "aac", "sample_rate": "48000", "channels": 2, "channel_layout": "stereo", "disposition": {"default": 1}, "tags": {"language": "fra"}},
+    {"index": 4, "codec_type": "subtitle"},
+    {"index": 5, "codec_type": "data"},
+    {"index": 6, "codec_type": "attachment"}
+  ],
+  "packets": [{"pts_time": "0"}, {"pts_time": "0.033333"}, {"pts_time": "0.066667"}]
+}

@@ -1,0 +1,8 @@
+{
+  "format": {"duration": "10.010000", "start_time": "1.5", "format_name": "mov,mp4", "tags": {"timecode": "01:00:00:00"}},
+  "streams": [
+    {"index": 0, "codec_type": "video", "codec_name": "h264", "pix_fmt": "yuv420p", "width": 1920, "height": 1080, "avg_frame_rate": "2997/100", "r_frame_rate": "30000/1001", "bit_rate": "20000000", "disposition": {"attached_pic": 0}},
+    {"index": 1, "codec_type": "audio", "codec_name": "aac", "sample_rate": "48000", "channels": 2, "channel_layout": "stereo", "sample_fmt": "fltp", "tags": {"language": "eng"}, "disposition": {"default": 1}}
+  ],
+  "packets": [{"pts_time": "1.500000"}, {"pts_time": "1.533367"}, {"pts_time": "1.566733"}, {"pts_time": "1.600100"}]
+}

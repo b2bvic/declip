@@ -1,0 +1,5 @@
+{
+  "format": {"duration": "10", "format_name": "mov,mp4"},
+  "streams": [{"index": 0, "codec_type": "video", "codec_name": "h264", "pix_fmt": "yuv420p", "width": 1080, "height": 1920, "avg_frame_rate": "287/10", "r_frame_rate": "30/1", "tags": {"rotate": "90"}, "side_data_list": [{"side_data_type": "Display Matrix", "rotation": -90}]}],
+  "packets": [{"pts_time": "0"}, {"pts_time": "0.033333"}, {"pts_time": "0.066667"}, {"pts_time": "0.133333"}]
+}

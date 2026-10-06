@@ -1,0 +1,5 @@
+{
+  "format": {"duration": "10", "format_name": "mov"},
+  "streams": [{"index": 0, "codec_type": "video", "codec_name": "h264", "pix_fmt": "yuv420p", "avg_frame_rate": "0/0", "r_frame_rate": "24/1"}],
+  "packets": [{"pts_time": "0"}, {"pts_time": "0.041667"}, {"pts_time": "0.083333"}]
+}

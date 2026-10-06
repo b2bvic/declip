@@ -1,0 +1,7 @@
+{
+  "format": {"duration": "10", "format_name": "mp3"},
+  "streams": [
+    {"index": 0, "codec_type": "audio", "codec_name": "mp3", "sample_rate": "44100", "channels": 2, "channel_layout": "stereo", "sample_fmt": "fltp"},
+    {"index": 1, "codec_type": "video", "codec_name": "mjpeg", "disposition": {"attached_pic": 1}}
+  ]
+}

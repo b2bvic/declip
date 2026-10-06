@@ -1,0 +1,9 @@
+{
+  "format": {"duration": "10", "format_name": "mov"},
+  "streams": [
+    {"index": 2, "codec_type": "video", "codec_name": "hevc", "pix_fmt": "yuv420p10le", "bits_per_raw_sample": "8", "width": 3840, "height": 2160, "avg_frame_rate": "25/1", "r_frame_rate": "25/1", "color_primaries": "bt2020", "color_transfer": "arib-std-b67", "color_space": "bt2020nc", "color_range": "tv", "tags": {"timecode": "02:00:00:00"}},
+    {"index": 3, "codec_type": "audio", "codec_name": "pcm_s24le", "sample_rate": "44100", "channels": 2, "channel_layout": "stereo", "sample_fmt": "s32", "bits_per_raw_sample": "24"},
+    {"index": 4, "codec_type": "data", "tags": {"timecode": "02:00:00:00"}}
+  ],
+  "packets": [{"pts_time": "0.08"}, {"pts_time": "0"}, {"pts_time": "0.04"}, {"pts_time": "0.12"}]
+}
