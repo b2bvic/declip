@@ -109,4 +109,4 @@ A final 24-bit WAV cannot recover precision lost inside that binary.
 
 Hardware certification requires separate platform receipts.
 Use the [README evidence matrix](../README.md#check-platform-support) for the current stated limits.
-Hosted CI remains assumed until the parent pushes and checks both runners.
+GitHub Actions runs the test suite on `ubuntu-latest` and `macos-latest` for each push. These runners have no GPU.

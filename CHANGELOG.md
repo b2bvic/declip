@@ -47,6 +47,6 @@
 - Linux with NVIDIA is assumed, not verified.
 - The synthetic filler-prompt probe is inconclusive on both backends. No real-speech receipt exists.
 - FCPXML passed structural checks, but import into an editor is unverified.
-- CI targets macOS and Linux only. Its first hosted result waits for the parent's push.
+- CI runs on `ubuntu-latest` and `macos-latest` only.
 - Runtime audits cover four supported extra/platform combinations. See [security results](SECURITY.md) for each scan and its deployment target.
 - Caption burn-in, LUT processing, forced 4K export, Windows support, and PyPI publication remain outside this version.

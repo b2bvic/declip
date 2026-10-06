@@ -19,9 +19,9 @@ PATTERNS = tuple(
 SOURCE_EXTRA = re.compile(r"\bresemble\b", re.IGNORECASE)
 ATTRIBUTION_LINES = (
     "[Project page](https://scalewithsearch.com/code/declip)",
-    "- [web2md](https://github.com/b2bvic/web2md)",
-    "- [twitter-bookmarks](https://github.com/b2bvic/twitter-bookmarks)",
-    "- [sws-skills](https://github.com/b2bvic/sws-skills)",
+    "- [owned-record](https://github.com/b2bvic/owned-record): agent context and session history in files you control, including `web2md`.",
+    "- [ops-scripts](https://github.com/b2bvic/ops-scripts): operator scripts, including the X bookmark import.",
+    "- [seo-checks](https://github.com/b2bvic/seo-checks): SEO page checks from one command.",
 )
 
 

@@ -11,7 +11,6 @@ Your source stays unchanged.
 
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/), Python 3.11 or later, and `ffmpeg` with `ffprobe`.
 Use the Git URL for version 0.5.0.
-These commands need the `v0.5.0` tag after release.
 You cannot install this version from PyPI.
 
 On macOS 14 or later with Apple silicon:
@@ -166,11 +165,10 @@ A verified test does not certify every device or input file.
 | Transcription | Verified synthetic MLX probe | Assumed, not verified | Verified synthetic faster probe on macOS; Linux assumed |
 | 10-bit render | Verified local VideoToolbox and software tests | Assumed NVENC path | Verified software tests on macOS; Linux assumed |
 | Review and render workflow | Verified local generated-media browser test | Assumed | Verified locally on macOS; Linux assumed |
-| Hosted CI | Assumed until the parent pushes and checks CI | Assumed until the parent pushes and checks CI | Same two-platform CI gate |
+| Hosted CI | GitHub Actions on `macos-latest` | GitHub Actions on `ubuntu-latest` (no GPU) | Both runners |
 
 Windows is planned for a later release and is untested.
 Linux with NVIDIA is assumed, not verified; no Linux hardware receipt exists.
-The release scope permits that Linux verification gap.
 
 ## Understand the limits
 
@@ -204,9 +202,9 @@ See [contribution instructions](CONTRIBUTING.md) for isolation and audit command
 
 ## Related repositories
 
-- [web2md](https://github.com/b2bvic/web2md)
-- [twitter-bookmarks](https://github.com/b2bvic/twitter-bookmarks)
-- [sws-skills](https://github.com/b2bvic/sws-skills)
+- [owned-record](https://github.com/b2bvic/owned-record): agent context and session history in files you control, including `web2md`.
+- [ops-scripts](https://github.com/b2bvic/ops-scripts): operator scripts, including the X bookmark import.
+- [seo-checks](https://github.com/b2bvic/seo-checks): SEO page checks from one command.
 
 ## License
 
