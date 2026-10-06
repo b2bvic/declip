@@ -1,0 +1,22 @@
+{
+  "schema_version": 2,
+  "source": {"path": "/synthetic/clip.wav", "sha256": "replaced-in-test", "duration_seconds": 10},
+  "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-02T00:00:00Z",
+  "transcript": {"model": "fixture-model", "segments": [
+    {"start": 0, "end": 2, "text": "Um hello", "words": [
+      {"start": 0.2, "end": 0.4, "word": " Um ", "probability": 0.2},
+      {"start": 0.6, "end": 1, "word": " hello "}]},
+    {"start": 3, "end": 4, "text": "Again", "words": [
+      {"start": 3, "end": 3.5, "word": "Again", "probability": 0.9}]}
+  ]},
+  "cuts": [
+    {"id": "legacy-filler", "kind": "filler", "start": 0.1, "end": 0.5, "label": "um", "confidence": 0.2, "status": "vetoed"},
+    {"id": "legacy-gap", "kind": "gap", "start": 2, "end": 2.5, "label": "silence", "confidence": 1, "status": "accepted"},
+    {"id": "legacy-manual", "kind": "manual", "start": 3, "end": 4, "label": "retake", "confidence": 1, "status": "accepted"}
+  ],
+  "processing": {"sound": {"enabled": true, "engine": "DeepFilterNet3"},
+                 "eq": {"preset": "natural", "lut": "legacy.cube"},
+                 "captions": {"enabled": true, "ass_path": "legacy.ass"}},
+  "review": {"passed_at": "2026-01-02T00:00:00Z", "content_sha256": "old"},
+  "stages": [{"stage": "fillers", "at": "2026-01-01T00:00:00Z", "proposed": 1}]
+}
