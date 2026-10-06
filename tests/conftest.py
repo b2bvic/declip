@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import json
 import shutil
 import subprocess
@@ -32,13 +31,6 @@ def isolate_state(tmp_path, monkeypatch):
     monkeypatch.setenv("DECLIP_CONFIG_DIR", str(tmp_path / "config"))
     monkeypatch.setenv("DECLIP_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.delenv("DECLIP_TRANSCRIBER", raising=False)
-
-
-@pytest.fixture
-def tool(isolate_state):
-    from declip.legacy import core
-
-    return importlib.reload(core)
 
 
 @pytest.hookimpl(hookwrapper=True)
