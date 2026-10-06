@@ -265,8 +265,8 @@ def make_plan(source, values):
     previous = None
     revision = None
     if path.exists():
-        previous = editlist.load_edit_list(path)
         revision = editlist.revision_of(path)
+        previous = editlist.load_edit_list(path)
         if (
             previous.source.sha256 != digest
             or Path(previous.source.path).resolve() != source
@@ -390,15 +390,13 @@ def plan_command(ctx, file, values, *, write):
                 document.transcript.to_dict(),
             )
     next_command = f"declip {'render' if document.review.state == ReviewState.PASSED else 'review'} {shlex_path(file)}"
+    edit_option = f" --edit-list {shlex_path(path)}" if values.get("edit_list") else ""
+    next_command += edit_option
     message = f"{len(document.cuts)} cuts; output duration {editlist.effective_timeline(document).duration_out:.6f}s"
     if write:
         message += f"\nEdit list: {path}\n{next_command}"
-        if values.get("edit_list"):
-            message += f" --edit-list {shlex_path(path)}"
         if values.get("export_fmt"):
-            message += (
-                f"\ndeclip export {shlex_path(file)} --format {values['export_fmt']}"
-            )
+            message += f"\ndeclip export {shlex_path(file)} --format {values['export_fmt']}{edit_option}"
     payload = report(document)
     if write:
         payload.update(path=str(path), next_command=next_command)
@@ -589,9 +587,11 @@ def enhance_command(ctx, file, **values):
 @click.argument("old", type=FILE)
 @click.option("--out", type=PATH)
 @click.option("--source", type=FILE)
-@click.option("--json", "json_out", is_flag=True)
-def migrate(old, out, source, json_out):
+@click.option("--json", "json_out", is_flag=True, default=None)
+@click.pass_context
+def migrate(ctx, old, out, source, json_out):
     """Convert schema 2 without changing the original file."""
+    json_out = values_for(ctx, {"json_out": json_out}).get("json_out")
     destination = out or editlist.migration_destination(old)
     if destination.exists() or destination.resolve() == old.resolve():
         raise DeclipError(f"Migration destination exists: {destination}")
@@ -684,8 +684,10 @@ def doctor(ctx, json_out, device, backend):
 @click.option("--yes", is_flag=True)
 @click.option("--overwrite", is_flag=True)
 @click.option("--make-default", is_flag=True)
-@click.option("--json", "json_out", is_flag=True)
+@click.option("--json", "json_out", is_flag=True, default=None)
+@click.pass_context
 def setup(
+    ctx,
     name,
     mic,
     room,
@@ -701,6 +703,7 @@ def setup(
     json_out,
 ):
     """Measure a sample and save a named rig profile."""
+    json_out = values_for(ctx, {"json_out": json_out}).get("json_out")
     answers = dict(
         mic=mic,
         room=room,
@@ -853,6 +856,20 @@ def config_show():
 def config_set(key, value):
     config = cfg.load_config()
     key = cfg.CONFIG_KEY_ALIASES.get(key, key)
+    if key in {"enhance", "remove_retakes", "cpu"}:
+        if value.lower() not in {"true", "false", "1", "0", "yes", "no"}:
+            raise click.BadParameter("expected true or false")
+        enabled = value.lower() in {"true", "1", "yes"}
+        if key == "cpu":
+            ui_warn("cpu is deprecated and has no effect; use device=cpu.")
+            emit(config)
+            return
+        value = (
+            ("auto" if enabled else "none")
+            if key == "enhance"
+            else str(enabled).lower()
+        )
+        key = "enhancer" if key == "enhance" else "retakes"
     if key == "default_rig":
         rig.load_rig(rig.rig_path(value, paths.config_dir()))
         config[key] = value

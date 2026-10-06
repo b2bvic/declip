@@ -376,3 +376,17 @@ def test_config_aliases_do_not_mask_explicit_values():
     )
     assert defaults["margin_ms"] == 12 and defaults["max_gap_ms"] == 15
     assert defaults["enhancer"] == "auto" and defaults["retakes"] is False
+
+
+def test_setup_honors_group_json_output(runner):
+    result = invoke(runner, ["--json-output", "setup", "--yes"])
+    assert json.loads(result.stdout)["name"] == "default"
+
+
+def test_config_set_legacy_aliases(runner):
+    invoke(runner, ["config", "set", "enhance", "true"])
+    invoke(runner, ["config", "set", "remove_retakes", "false"])
+    result = invoke(runner, ["config", "set", "cpu", "true"])
+    assert "deprecated" in result.stderr
+    defaults = config.run_defaults(config.load_config())
+    assert defaults["enhancer"] == "auto" and defaults["retakes"] is False
