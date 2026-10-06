@@ -92,7 +92,12 @@ def test_ci_matrix_and_required_checks():
     assert "declip doctor" in smoke and "Traceback" in smoke
     assert workflow["defaults"]["run"]["shell"] == "bash"
     assert workflow["env"]["HF_HUB_OFFLINE"] == "1"
-    assert {"DECLIP_CONFIG_DIR", "DECLIP_CACHE_DIR"} <= workflow["env"].keys()
+    assert "runner." not in str(workflow["env"])
+    for job in jobs.values():
+        isolate = job["steps"][0]["run"]
+        assert 'DECLIP_CONFIG_DIR=$RUNNER_TEMP/declip-config' in isolate
+        assert 'DECLIP_CACHE_DIR=$RUNNER_TEMP/declip-cache' in isolate
+        assert '"$GITHUB_ENV"' in isolate
 
 
 def test_dependabot_tracks_uv_and_actions():
