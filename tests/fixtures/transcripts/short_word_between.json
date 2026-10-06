@@ -1,0 +1,31 @@
+{
+  "language": "en",
+  "duration": 2,
+  "segments": [
+    {
+      "start": 0.5,
+      "end": 1.15,
+      "text": "um cat uh",
+      "words": [
+        {
+          "word": "um",
+          "start": 0.5,
+          "end": 0.7,
+          "probability": 0.9
+        },
+        {
+          "word": "cat",
+          "start": 0.75,
+          "end": 0.9,
+          "probability": 1
+        },
+        {
+          "word": "uh",
+          "start": 0.95,
+          "end": 1.15,
+          "probability": 0.85
+        }
+      ]
+    }
+  ]
+}

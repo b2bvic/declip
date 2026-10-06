@@ -1,0 +1,163 @@
+{
+  "language": "en",
+  "duration": 10,
+  "segments": [
+    {
+      "start": 0,
+      "end": 9.2,
+      "text": "what kind of camera you know the answer. it was, kind of, slow. lead you know next. lead you know next. lead you know next.",
+      "words": [
+        {
+          "word": "what",
+          "start": 0,
+          "end": 0.2,
+          "probability": 1
+        },
+        {
+          "word": "kind",
+          "start": 0.25,
+          "end": 0.45,
+          "probability": 1
+        },
+        {
+          "word": "of",
+          "start": 0.5,
+          "end": 0.6,
+          "probability": 1
+        },
+        {
+          "word": "camera",
+          "start": 0.65,
+          "end": 0.9,
+          "probability": 1
+        },
+        {
+          "word": "you",
+          "start": 1,
+          "end": 1.2,
+          "probability": 1
+        },
+        {
+          "word": "know",
+          "start": 1.25,
+          "end": 1.45,
+          "probability": 1
+        },
+        {
+          "word": "the",
+          "start": 1.5,
+          "end": 1.65,
+          "probability": 1
+        },
+        {
+          "word": "answer.",
+          "start": 1.7,
+          "end": 1.9,
+          "probability": 1
+        },
+        {
+          "word": "it",
+          "start": 2.2,
+          "end": 2.4,
+          "probability": 1
+        },
+        {
+          "word": "was,",
+          "start": 2.45,
+          "end": 2.65,
+          "probability": 1
+        },
+        {
+          "word": "kind",
+          "start": 2.7,
+          "end": 2.9,
+          "probability": 0.9
+        },
+        {
+          "word": "of,",
+          "start": 2.95,
+          "end": 3.1,
+          "probability": 0.8
+        },
+        {
+          "word": "slow.",
+          "start": 3.15,
+          "end": 3.4,
+          "probability": 1
+        },
+        {
+          "word": "lead",
+          "start": 4,
+          "end": 4.2,
+          "probability": 1
+        },
+        {
+          "word": "you",
+          "start": 4.499,
+          "end": 4.6,
+          "probability": 1
+        },
+        {
+          "word": "know",
+          "start": 4.65,
+          "end": 4.8,
+          "probability": 1
+        },
+        {
+          "word": "next.",
+          "start": 5.001,
+          "end": 5.2,
+          "probability": 1
+        },
+        {
+          "word": "lead",
+          "start": 6,
+          "end": 6.2,
+          "probability": 1
+        },
+        {
+          "word": "you",
+          "start": 6.501,
+          "end": 6.6,
+          "probability": 1
+        },
+        {
+          "word": "know",
+          "start": 6.65,
+          "end": 6.8,
+          "probability": 1
+        },
+        {
+          "word": "next.",
+          "start": 6.999,
+          "end": 7.2,
+          "probability": 1
+        },
+        {
+          "word": "lead",
+          "start": 8,
+          "end": 8.2,
+          "probability": 1
+        },
+        {
+          "word": "you",
+          "start": 8.501,
+          "end": 8.6,
+          "probability": 0.9
+        },
+        {
+          "word": "know",
+          "start": 8.65,
+          "end": 8.8,
+          "probability": 0.9
+        },
+        {
+          "word": "next.",
+          "start": 9.001,
+          "end": 9.2,
+          "probability": 1
+        }
+      ]
+    }
+  ]
+}

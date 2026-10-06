@@ -1,0 +1,9 @@
+[
+  {
+    "kind": "retake",
+    "start": 0.5,
+    "end": 1.2,
+    "label": "retake (100% match)",
+    "low_confidence": false
+  }
+]

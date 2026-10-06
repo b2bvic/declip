@@ -1,0 +1,31 @@
+{
+  "language": "en",
+  "duration": 3,
+  "segments": [
+    {
+      "start": 0.5,
+      "end": 2.2,
+      "text": "um speech uh",
+      "words": [
+        {
+          "word": "um",
+          "start": 0.5,
+          "end": 0.7,
+          "probability": 0.2
+        },
+        {
+          "word": "speech",
+          "start": 1,
+          "end": 1.3,
+          "probability": 1
+        },
+        {
+          "word": "uh",
+          "start": 2,
+          "end": 2.2,
+          "probability": 0.9
+        }
+      ]
+    }
+  ]
+}
