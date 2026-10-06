@@ -5,6 +5,8 @@ import pytest
 
 from declip import audiochain, config, paths
 
+pytestmark = pytest.mark.contract
+
 
 @pytest.mark.parametrize("kind", ["config", "cache"])
 def test_environment_override_created_on_use(tmp_path, monkeypatch, kind):

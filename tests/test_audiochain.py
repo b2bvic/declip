@@ -5,6 +5,8 @@ import pytest
 from declip import audiochain, fillers, paths
 from declip.contracts import DeclipError, FilterChainRejected, Loudness, Tier
 
+pytestmark = pytest.mark.contract
+
 
 @pytest.mark.parametrize(
     ("chain", "body", "target"),

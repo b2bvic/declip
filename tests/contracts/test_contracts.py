@@ -1,5 +1,9 @@
 """Frozen Appendix A assertions. Do not derive expectations from implementation."""
 
+import pytest
+
+pytestmark = pytest.mark.contract
+
 EXPECTED_FIELDS = {
     "Loudness": [("i", "float"), ("tp", "float"), ("lra", "float")],
     "Preset": [
@@ -714,7 +718,6 @@ def test_optional_fields_and_time_precision():
 
 
 def test_invalid_edit_list_data_raises_contract_error():
-    import pytest
 
     from declip import contracts as c
 

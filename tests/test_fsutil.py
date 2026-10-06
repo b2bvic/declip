@@ -6,6 +6,8 @@ import pytest
 
 from declip import fsutil
 
+pytestmark = pytest.mark.contract
+
 
 def test_atomic_json_round_trip(tmp_path):
     path = tmp_path / "new" / "data.json"
