@@ -98,7 +98,8 @@ def test_cli_round_trip(tmp_path, make_media):
 
     worker = threading.Thread(target=start, daemon=True)
     worker.start()
-    assert ready.wait(10), failures
+    # Startup hashes the source and encodes the preview proxy; hosted macOS runners need more time.
+    assert ready.wait(120), failures
     url = urlsplit(urls[0])
     token = parse_qs(url.query)["token"][0]
 
@@ -109,7 +110,7 @@ def test_cli_round_trip(tmp_path, make_media):
             method=method,
             headers={"X-Declip-Token": token, "Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(req, timeout=10) as response:
+        with urllib.request.urlopen(req, timeout=60) as response:
             return json.load(response)
 
     current = request("/api/edit")
