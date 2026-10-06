@@ -1,1 +1,25 @@
-/* Review implementation belongs to P9. */
+:root { color-scheme: dark light; font-family: system-ui, sans-serif; }
+body { max-width: 1100px; margin: auto; padding: 1.5rem; background: #141920; color: #e9edf2; }
+header { border-bottom: 1px solid #536071; margin-bottom: 1rem; }
+h1 { font-size: 1.7rem; margin-bottom: .3rem; }
+h2 { font-size: 1.2rem; }
+video { display: block; max-width: 100%; width: 640px; max-height: 480px; background: #090c10; }
+button, select { font: inherit; background: #263241; color: inherit; border: 1px solid #64758a; border-radius: .3rem; padding: .45rem .65rem; cursor: pointer; }
+button:focus-visible, .word:focus-visible { outline: 3px solid #f3d06c; }
+button:disabled { opacity: .6; cursor: default; }
+#notice { min-height: 1.5em; color: #f3d06c; }
+#transcript { line-height: 2.2; padding: 1rem; background: #1b2430; border-radius: .4rem; user-select: text; }
+.word { cursor: pointer; padding: .12rem; border-radius: .2rem; }
+.word:hover { background: #39495f; }
+.word.accepted, .word.proposed { text-decoration: line-through; }
+.word.proposed { text-decoration-style: dotted; }
+.filler { border-bottom: 3px solid #79b8ff; }
+.gap { border-bottom: 3px solid #b8a1ef; }
+.retake { border-bottom: 3px solid #f4b079; }
+.manual { border-bottom: 3px solid #83d3ac; }
+.cut-row { margin: .5rem 0; padding: .5rem; border-radius: .25rem; }
+.cut-row.current { outline: 2px solid #f3d06c; background: #263241; }
+.cut-row.accepted > button:first-child { text-decoration: line-through; }
+.badge { display: inline-block; font-size: .85rem; margin-left: .5rem; padding: .2rem; }
+.warning { color: #f3d06c; border: 1px solid currentColor; border-radius: .2rem; }
+@media (max-width: 600px) { body { padding: .75rem; } button { margin: .2rem 0; } }
