@@ -66,9 +66,20 @@ class FasterTranscriber:
             import numpy as np
 
             with wave.open(str(wav), "rb") as audio:
-                if (audio.getframerate(), audio.getnchannels(), audio.getsampwidth()) != (16000, 1, 2):
-                    raise TranscriberUnavailable("faster requires 16 kHz mono PCM 16-bit WAV")
-                samples = np.frombuffer(audio.readframes(audio.getnframes()), dtype="<i2").astype(np.float32) / 32768.0
+                if (
+                    audio.getframerate(),
+                    audio.getnchannels(),
+                    audio.getsampwidth(),
+                ) != (16000, 1, 2):
+                    raise TranscriberUnavailable(
+                        "faster requires 16 kHz mono PCM 16-bit WAV"
+                    )
+                samples = (
+                    np.frombuffer(
+                        audio.readframes(audio.getnframes()), dtype="<i2"
+                    ).astype(np.float32)
+                    / 32768.0
+                )
             rows, info = self._models[key].transcribe(samples, **kwargs)
             normalized = [
                 {

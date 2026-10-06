@@ -39,6 +39,24 @@ def wav_file(path, seconds=61, middle=0):
 def libraries(monkeypatch):
     calls, loads = [], []
 
+    class Samples:
+        def __init__(self, data):
+            self.data = data
+
+        def astype(self, dtype):
+            assert dtype == "float32"
+            return self
+
+        def __truediv__(self, divisor):
+            assert divisor == 32768.0
+            return self
+
+    monkeypatch.setitem(
+        sys.modules,
+        "numpy",
+        NS(frombuffer=lambda data, dtype: Samples(data), float32="float32"),
+    )
+
     def mlx_run(path, **kwargs):
         calls.append((path, kwargs))
         return {
@@ -108,6 +126,8 @@ def test_real_normalization_and_kwargs(backend, libraries, tmp_path):
     assert calls[0][1]["condition_on_previous_text"] is False
     assert calls[0][1]["language"] == "en"
     if backend == "faster":
+        assert not isinstance(calls[0][0], str)  # PCM array bypasses the PyAV decoder.
+        assert isinstance(calls[0][0].data, bytes)
         assert loads[0][1] == {
             "device": "cpu",
             "compute_type": "int8",
@@ -491,3 +511,62 @@ def test_missing_ffmpeg_and_source_overwrite(tmp_path, monkeypatch):
         transcribe.extract_transcription_audio(
             source, tmp_path / "output.wav", audio_index=None
         )
+
+
+def test_probe_make_clip_timing_with_mocked_say(tmp_path, monkeypatch):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "prompt_probe_make", Path(__file__).parents[1] / "scripts" / "prompt_probe.py"
+    )
+    probe = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(probe)
+    phrase = [""]
+
+    def run(argv, **kwargs):
+        if argv[0] == "say":
+            phrase[0] = argv[-1]
+        else:
+            duration = 0.3 if phrase[0] in {"um", "uh"} else 1.5
+            with wave.open(argv[-1], "wb") as output:
+                output.setparams((1, 2, 48000, 0, "NONE", "not compressed"))
+                output.writeframes(b"\0\0" * int(48000 * duration))
+
+    monkeypatch.setattr(probe.sys, "platform", "darwin")
+    monkeypatch.setattr(probe.subprocess, "run", run)
+    report = probe.make_clip(tmp_path / "fixture", "test")
+    assert report["early_labels"] >= 6 and report["late_labels"] >= 12
+    assert report["duration"] >= 120
+    manifest = json.loads((tmp_path / "fixture" / "manifest.json").read_text())
+    assert manifest["license"] == "synthetic, generated locally with macOS `say`"
+    assert manifest["clip_sha256"] == probe.file_hash(tmp_path / "fixture" / "clip.wav")
+    assert all(
+        abs(b["start"] - a["end"] - 0.4) < 1e-6
+        for a, b in zip(manifest["phrases"], manifest["phrases"][1:])
+    )
+
+
+def test_probe_dataless_detection():
+    import importlib.util
+    import stat
+
+    spec = importlib.util.spec_from_file_location(
+        "prompt_probe_dataless",
+        Path(__file__).parents[1] / "scripts" / "prompt_probe.py",
+    )
+    probe = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(probe)
+    placeholder = NS(
+        stat=lambda: NS(
+            st_flags=getattr(stat, "SF_DATALESS", 1 << 30), st_size=100, st_blocks=0
+        )
+    )
+    # SF_DATALESS exists on Darwin. The zero-block fallback covers flag transitions.
+    if sys.platform == "darwin":
+        assert probe.is_dataless(placeholder)
+        assert probe.is_dataless(
+            NS(stat=lambda: NS(st_flags=0, st_size=100, st_blocks=0))
+        )
+    assert not probe.is_dataless(
+        NS(stat=lambda: NS(st_flags=0, st_size=100, st_blocks=8))
+    )
