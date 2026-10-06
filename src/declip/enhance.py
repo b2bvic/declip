@@ -52,6 +52,8 @@ def _strength(value: float) -> float:
 
 
 def _check_paths(wav_in: Path, wav_out: Path) -> None:
+    if not wav_in.is_file():
+        raise RenderError(f"Cannot read PCM input: {wav_in}")
     if wav_in.resolve() == wav_out.resolve() or (
         wav_out.exists() and os.path.samefile(wav_in, wav_out)
     ):
@@ -109,7 +111,10 @@ class NoneEnhancer:
         _strength(strength)
         _check_paths(wav_in, wav_out)
         try:
-            shutil.copyfile(wav_in, wav_out)
+            with tempfile.TemporaryDirectory(prefix="declip-copy-", dir=wav_out.parent) as raw:
+                output = Path(raw) / "copy.wav"
+                shutil.copyfile(wav_in, output)
+                os.replace(output, wav_out)
         except OSError as exc:
             raise RenderError(f"Cannot copy PCM audio: {exc}") from exc
 

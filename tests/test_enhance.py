@@ -275,6 +275,65 @@ def test_probe_failure_is_reported(monkeypatch):
     assert not available and "probe failed" in reason
 
 
-def test_missing_copy_input_is_domain_error(tmp_path):
-    with pytest.raises(RenderError, match="Cannot copy"):
-        enhance.NoneEnhancer().enhance(tmp_path / "missing.wav", tmp_path / "out.wav", 0.5)
+@pytest.mark.parametrize("backend", [enhance.NoneEnhancer, enhance.AfftdnEnhancer, enhance.DeepFilterEnhancer])
+def test_missing_input_is_domain_error_with_existing_output(tmp_path, backend):
+    output = tmp_path / "out.wav"
+    output.write_bytes(b"existing output")
+    with pytest.raises(RenderError, match="Cannot read PCM input"):
+        backend().enhance(tmp_path / "missing.wav", output, 0.5)
+    assert output.read_bytes() == b"existing output"
+
+
+def test_failed_copy_keeps_existing_output(tmp_path, monkeypatch):
+    source, output = tmp_path / "source.wav", tmp_path / "out.wav"
+    _pcm(source)
+    output.write_bytes(b"existing output")
+
+    def fail_copy(source, destination):
+        Path(destination).write_bytes(b"partial output")
+        raise OSError("synthetic disk failure")
+
+    monkeypatch.setattr(enhance.shutil, "copyfile", fail_copy)
+    with pytest.raises(RenderError, match="synthetic disk failure"):
+        enhance.NoneEnhancer().enhance(source, output, 0.5)
+    assert output.read_bytes() == b"existing output"
+    assert not list(tmp_path.glob("declip-copy-*"))
+
+
+@pytest.mark.ffmpeg
+@pytest.mark.parametrize("name", ["afftdn", "deepfilter"])
+@pytest.mark.parametrize("layout,channels,rate", [("mono", 1, 48000), ("5.1", 6, 44100)])
+def test_other_layouts_kept(name, layout, channels, rate, tmp_path, make_media, fake_deepfilter):
+    source = make_media(tmp_path, {
+        "name": "layout.wav", "duration": 0.137,
+        "inputs": [f"anullsrc=r={rate}:cl={layout}"],
+        "args": ["-c:a", "pcm_s24le"],
+    })
+    output = tmp_path / "output.wav"
+    enhance.select_enhancer(name).enhance(source, output, 0.5)
+    actual, original = _probe(output), _probe(source)
+    assert actual["channel_layout"] == layout
+    assert actual["channels"] == channels
+    assert actual["sample_rate"] == str(rate)
+    assert actual["duration_ts"] == original["duration_ts"]
+
+
+@pytest.mark.ffmpeg
+def test_afftdn_reduces_generated_noise(tmp_path, make_media):
+    source = make_media(tmp_path, {
+        "name": "noise.wav", "duration": 2,
+        "inputs": ["anoisesrc=color=white:amplitude=0.003:seed=1:r=44100"],
+        "args": ["-c:a", "pcm_s24le"],
+    })
+    output = tmp_path / "denoised.wav"
+    enhance.select_enhancer("afftdn").enhance(source, output, 1)
+
+    def rms(path):
+        raw = subprocess.run([
+            "ffmpeg", "-v", "error", "-i", str(path), "-map", "0:a:0",
+            "-f", "f32le", "-c:a", "pcm_f32le", "-",
+        ], capture_output=True, check=True).stdout
+        samples = struct.unpack(f"<{len(raw) // 4}f", raw)[22050:]
+        return math.sqrt(sum(sample * sample for sample in samples) / len(samples))
+
+    assert rms(output) < 0.9 * rms(source)
