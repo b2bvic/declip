@@ -496,8 +496,10 @@ def test_prompt_probe_recall_one_to_one_and_real_count_rule():
         {"start": 0, "end": 30, "count": 1},
         {"start": 30, "end": 60, "count": 2},
     ]
-    assert probe.real_pass(windows, windows)
-    assert not probe.real_pass([{**windows[0], "count": 10}, windows[1]], windows)
+    assert probe.real_pass(windows, windows) == "passed"
+    assert (
+        probe.real_pass([{**windows[0], "count": 10}, windows[1]], windows) == "failed"
+    )
 
 
 def test_missing_ffmpeg_and_source_overwrite(tmp_path, monkeypatch):
@@ -510,6 +512,137 @@ def test_missing_ffmpeg_and_source_overwrite(tmp_path, monkeypatch):
     with pytest.raises(ToolMissing, match="ffmpeg"):
         transcribe.extract_transcription_audio(
             source, tmp_path / "output.wav", audio_index=None
+        )
+
+
+@pytest.fixture
+def prompt_probe():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "prompt_probe", Path(__file__).parents[1] / "scripts" / "prompt_probe.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize(
+    "prompt,baseline,expected",
+    [
+        ([0, 0], [0, 0], "inconclusive"),
+        ([1, 1], [0, 0], "inconclusive"),
+        ([0, 0], [1, 1], "failed"),
+        ([1, 1], [1, 1], "passed"),
+        ([1, 1], [2, 2], "failed"),
+        ([4, 1], [1, 1], "failed"),
+    ],
+)
+def test_real_speech_status(prompt_probe, prompt, baseline, expected):
+    def windows(counts):
+        return [
+            {"start": i * 30, "end": (i + 1) * 30, "count": count}
+            for i, count in enumerate(counts)
+        ]
+
+    assert prompt_probe.real_pass(windows(prompt), windows(baseline)) == expected
+
+
+def test_real_speech_partial_window_normalization(prompt_probe):
+    windows = [
+        {"start": 0, "end": 30, "count": 4},
+        {"start": 30, "end": 45, "count": 1},
+    ]
+    assert prompt_probe.real_pass(windows, windows) == "passed"
+
+
+@pytest.mark.parametrize("backend", ["mlx", "faster"])
+@pytest.mark.parametrize("synthetic_persists", [False, True])
+@pytest.mark.parametrize(
+    "prompt_counts,baseline_counts,status",
+    [
+        ([0, 0], [0, 0], "inconclusive"),
+        ([1, 1], [0, 0], "inconclusive"),
+        ([1, 1], [1, 1], "passed"),
+        ([1, 0], [1, 1], "failed"),
+    ],
+)
+def test_probe_real_receipt_and_verdict(
+    prompt_probe,
+    tmp_path,
+    monkeypatch,
+    backend,
+    synthetic_persists,
+    prompt_counts,
+    baseline_counts,
+    status,
+):
+    from declip.contracts import Word
+
+    clip = wav_file(tmp_path / "clip.wav", 60)
+    real = wav_file(tmp_path / "real.wav", 60)
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "clip_sha256": prompt_probe.file_hash(clip),
+                "duration": 60,
+                "fillers": [
+                    {"label": "um", "start": 1, "end": 1.2},
+                    {"label": "um", "start": 31, "end": 31.2},
+                ],
+            }
+        )
+    )
+    calls = []
+
+    def run(path, opts):
+        calls.append((path.name, opts.prompt_mode, bool(opts.initial_prompt)))
+        if path.name == "real.wav":
+            counts = prompt_counts if opts.initial_prompt else baseline_counts
+        elif not opts.initial_prompt:
+            counts = [0, 0]
+        else:
+            counts = [1, int(synthetic_persists or opts.prompt_mode != "initial")]
+        words = tuple(
+            Word(i, start, start + 0.2, "um", 1, 0)
+            for i, start in enumerate(
+                window * 30 + 1 + j
+                for window, count in enumerate(counts)
+                for j in range(count)
+            )
+        )
+        return Transcript(backend, "test", "en", None, words, ())
+
+    monkeypatch.setattr(
+        prompt_probe,
+        "select",
+        lambda *a, **k: BackendSelection(
+            NS(name=backend, transcribe=run), "cpu", "int8"
+        ),
+    )
+    monkeypatch.setattr(
+        prompt_probe, "extract_transcription_audio", lambda path, *a, **k: path
+    )
+    report = prompt_probe.probe(clip, manifest, backend, "cpu", "test", real)
+    # Check the serialized receipt, not just the result helper.
+    receipt = json.loads(json.dumps(report))
+    assert receipt["real"]["status"] == "completed"
+    assert receipt["real"]["initial_status"] == status
+    assert "initial_passed" not in receipt["real"]
+    fallback = "chunked" if backend == "mlx" else "hotwords"
+    expected_mode = (
+        "initial"
+        if status == "passed" or (status == "inconclusive" and synthetic_persists)
+        else fallback
+    )
+    assert receipt["auto_prompt_mode"] == expected_mode
+    if status == "failed":
+        assert receipt["real"][fallback + "_status"] == "failed"
+        assert fallback in receipt["synthetic"]
+    else:
+        assert not any(
+            name == "real.wav" and mode == fallback for name, mode, _ in calls
         )
 
 

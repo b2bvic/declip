@@ -18,6 +18,7 @@ import time
 import wave
 from dataclasses import replace
 from pathlib import Path
+from typing import Literal
 
 from declip.contracts import DeclipError, TranscribeOptions, Transcript
 from declip.fillers import load_fillers
@@ -173,15 +174,23 @@ def window_counts(transcript: Transcript, duration: float) -> list[dict]:
     ]
 
 
-def real_pass(prompt: list[dict], baseline: list[dict]) -> bool:
+def real_pass(
+    prompt: list[dict], baseline: list[dict]
+) -> Literal["passed", "failed", "inconclusive"]:
     total = sum(w["count"] for w in prompt)
     no_prompt = sum(w["count"] for w in baseline)
+    if no_prompt == 0:
+        return "inconclusive"
     # Compare mean counts per 30-second window. Normalize a partial final window.
     late_seconds = sum(w["end"] - w["start"] for w in prompt[1:])
     late_mean = (
         sum(w["count"] for w in prompt[1:]) * 30 / late_seconds if late_seconds else 0
     )
-    return total >= no_prompt and late_mean >= prompt[0]["count"] * 0.5
+    return (
+        "passed"
+        if total >= no_prompt and late_mean >= prompt[0]["count"] * 0.5
+        else "failed"
+    )
 
 
 def is_dataless(path: Path) -> bool:
@@ -294,20 +303,23 @@ def probe(
                         duration = audio.getnframes() / audio.getframerate()
                     prompted = window_counts(run(real_wav, "initial"), duration)
                     no_prompt = window_counts(run(real_wav, "initial", False), duration)
-                    passed = real_pass(prompted, no_prompt)
+                    status = real_pass(prompted, no_prompt)
                     report["real"] = {
                         "status": "completed",
                         "duration": duration,
                         "initial": prompted,
                         "no_prompt": no_prompt,
-                        "initial_passed": passed,
+                        "initial_status": status,
                     }
-                    mode = "initial" if passed else fallback
-                    if not passed:
+                    # Only conclusive real-speech evidence overrides the synthetic result.
+                    if status == "passed":
+                        mode = "initial"
+                    elif status == "failed":
+                        mode = fallback
                         report["real"][fallback] = window_counts(
                             run(real_wav, fallback), duration
                         )
-                        report["real"][fallback + "_passed"] = real_pass(
+                        report["real"][fallback + "_status"] = real_pass(
                             report["real"][fallback], no_prompt
                         )
                         if fallback not in report["synthetic"]:
