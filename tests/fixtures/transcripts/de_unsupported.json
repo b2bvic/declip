@@ -1,0 +1,25 @@
+{
+  "language": "de",
+  "duration": 2,
+  "segments": [
+    {
+      "start": 0.5,
+      "end": 1.2,
+      "text": "Äh, weiter.",
+      "words": [
+        {
+          "word": "Äh,",
+          "start": 0.5,
+          "end": 0.7,
+          "probability": 0.9
+        },
+        {
+          "word": "weiter.",
+          "start": 1,
+          "end": 1.2,
+          "probability": 1
+        }
+      ]
+    }
+  ]
+}

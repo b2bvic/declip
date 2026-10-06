@@ -1,0 +1,37 @@
+{
+  "language": "en",
+  "duration": 4,
+  "segments": [
+    {
+      "start": 0.5,
+      "end": 2.8,
+      "text": "Um, hello uh ending.",
+      "words": [
+        {
+          "word": "Um,",
+          "start": 0.5,
+          "end": 0.7,
+          "probability": 0.95
+        },
+        {
+          "word": "hello",
+          "start": 1,
+          "end": 1.2,
+          "probability": 1
+        },
+        {
+          "word": "uh",
+          "start": 2,
+          "end": 2.2,
+          "probability": 0.9
+        },
+        {
+          "word": "ending.",
+          "start": 2.5,
+          "end": 2.8,
+          "probability": 1
+        }
+      ]
+    }
+  ]
+}

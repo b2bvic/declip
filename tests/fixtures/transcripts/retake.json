@@ -1,0 +1,81 @@
+{
+  "language": "en",
+  "duration": 6,
+  "segments": [
+    {
+      "start": 0.5,
+      "end": 1.2,
+      "text": "We can begin.",
+      "words": [
+        {
+          "word": "We",
+          "start": 0.5,
+          "end": 0.7,
+          "probability": 1
+        },
+        {
+          "word": "can",
+          "start": 0.75,
+          "end": 0.95,
+          "probability": 1
+        },
+        {
+          "word": "begin.",
+          "start": 1,
+          "end": 1.2,
+          "probability": 1
+        }
+      ]
+    },
+    {
+      "start": 2,
+      "end": 2.7,
+      "text": "we can begin!",
+      "words": [
+        {
+          "word": "we",
+          "start": 2,
+          "end": 2.2,
+          "probability": 1
+        },
+        {
+          "word": "can",
+          "start": 2.25,
+          "end": 2.45,
+          "probability": 1
+        },
+        {
+          "word": "begin!",
+          "start": 2.5,
+          "end": 2.7,
+          "probability": 1
+        }
+      ]
+    },
+    {
+      "start": 4,
+      "end": 4.7,
+      "text": "Other words follow.",
+      "words": [
+        {
+          "word": "Other",
+          "start": 4,
+          "end": 4.2,
+          "probability": 1
+        },
+        {
+          "word": "words",
+          "start": 4.25,
+          "end": 4.45,
+          "probability": 1
+        },
+        {
+          "word": "follow.",
+          "start": 4.5,
+          "end": 4.7,
+          "probability": 1
+        }
+      ]
+    }
+  ]
+}
