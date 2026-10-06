@@ -131,7 +131,7 @@ def _edl(
             "",
         ]
         record += count
-    return "\n".join(lines) + "\n"
+    return "\n".join(lines)
 
 
 def _xml_tag(tag: str, **attrs) -> str:
@@ -381,10 +381,10 @@ def _srt(edit_list: EditList, timeline: EffectiveTimeline) -> str:
         for start, end, text in cues
         if _srt_time(start) != _srt_time(end)
     ]
-    return "".join(
-        f"{i}\n{_srt_time(start)} --> {_srt_time(end)}\n{text}\n\n"
+    return "\n\n".join(
+        f"{i}\n{_srt_time(start)} --> {_srt_time(end)}\n{text}"
         for i, (start, end, text) in enumerate(visible, 1)
-    )
+    ) + ("\n" if visible else "")
 
 
 def _markers(edit_list: EditList, timeline: EffectiveTimeline) -> str:
