@@ -389,7 +389,12 @@ def plan_command(ctx, file, values, *, write):
                 file.with_name(file.stem + ".transcript.json"),
                 document.transcript.to_dict(),
             )
-    next_command = f"declip {'render' if document.review.state == ReviewState.PASSED else 'review'} {shlex_path(file)}"
+    next_stage = (
+        "render"
+        if document.review.state == ReviewState.PASSED and not values.get("export_fmt")
+        else "review"
+    )
+    next_command = f"declip {next_stage} {shlex_path(file)}"
     edit_option = f" --edit-list {shlex_path(path)}" if values.get("edit_list") else ""
     next_command += edit_option
     message = f"{len(document.cuts)} cuts; output duration {editlist.effective_timeline(document).duration_out:.6f}s"

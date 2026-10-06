@@ -390,3 +390,23 @@ def test_config_set_legacy_aliases(runner):
     assert "deprecated" in result.stderr
     defaults = config.run_defaults(config.load_config())
     assert defaults["enhancer"] == "auto" and defaults["retakes"] is False
+
+
+@pytest.mark.ffmpeg
+def test_v1_export_names_review_even_when_review_is_current(runner, clip):
+    path = planned(runner, clip)
+    document = editlist.load_edit_list(path)
+    document = editlist.apply_decisions(
+        document,
+        decisions={cut.id: CutStatus.REJECTED for cut in document.cuts},
+        add_manual=[],
+        remove_manual=[],
+    )
+    editlist.save_edit_list(
+        path, editlist.mark_review_passed(document, now=datetime.now(timezone.utc))
+    )
+    result = invoke(
+        runner, ["process", clip, "--stages", "fillers", "--export", "markers"]
+    )
+    assert "declip review" in result.stdout and "declip export" in result.stdout
+    assert not clip.with_name(clip.stem + ".declip.markers.json").exists()
