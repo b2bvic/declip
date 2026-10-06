@@ -162,10 +162,13 @@ A verified test does not certify every device or input file.
 
 | Function | macOS arm64 | Linux with NVIDIA | CPU on macOS or Linux |
 |---|---|---|---|
-| Transcription | Verified synthetic MLX probe | Assumed, not verified | Verified synthetic faster probe on macOS; Linux assumed |
-| 10-bit render | Verified local VideoToolbox and software tests | Assumed NVENC path | Verified software tests on macOS; Linux assumed |
+| Transcription | Verified MLX on Metal: 18/18 fillers, zero false hits | Assumed, not verified | Verified faster int8 on macOS: 16/18 fillers, one false hit; Linux assumed |
+| 8-bit render | Verified H.264 through VideoToolbox | Assumed NVENC path | Verified software H.264 on macOS; Linux assumed |
+| 10-bit render | Verified VideoToolbox HEVC Main 10, `yuv420p10le` | Assumed NVENC path | Verified software HEVC Main 10 on macOS, `yuv420p10le`; Linux assumed |
+| A/V sync over 250 keeps | Verified VideoToolbox: maximum offset 0.498 frames | Assumed, not verified | Verified software on macOS: maximum offset 0.498 frames; Linux assumed |
 | Review and render workflow | Verified local generated-media browser test | Assumed | Verified locally on macOS; Linux assumed |
-| Hosted CI | GitHub Actions on `macos-latest` | GitHub Actions on `ubuntu-latest` (no GPU) | Both runners |
+| Hardware receipt | [Metal receipt](docs/receipts/macos-metal.json), passed | Waived for 0.5.0 while hardware is unreachable; remains assumed | [CPU receipt](docs/receipts/macos-cpu.json), passed on macOS only |
+| Hosted CI | Assumed; `macos-latest` job configured | Assumed; `ubuntu-latest` job configured (no GPU) | Both runner jobs configured; hosted results assumed |
 
 Windows is planned for a later release and is untested.
 Linux with NVIDIA is assumed, not verified; no Linux hardware receipt exists.

@@ -1,0 +1,91 @@
+{
+  "arch": "arm64",
+  "av_sync_max_offset_frames": 0.4980119880119911,
+  "av_sync_probe": {
+    "keeps": 250,
+    "flashes": 250,
+    "beeps": 250,
+    "max_offset_frames": 0.4980119880119911,
+    "batch_border_offsets_frames": {
+      "40/41": [
+        0.19831168831164458,
+        0.22828171828171118
+      ],
+      "80/81": [
+        0.3974925074925681,
+        0.42743256743263386
+      ]
+    },
+    "duration_error_frames": 0.013986013986052374,
+    "encoder": "videotoolbox",
+    "fps": "30000/1001",
+    "width": 320,
+    "height": 240
+  },
+  "backend": "mlx",
+  "chip": "Apple M4 Pro",
+  "clip_sha256": "5fe9b4c5eac2472c22b19c803090b409171f12809b961ce39fe4fd15ce81e42a",
+  "compute_type": "auto",
+  "ctranslate2_cuda_device_count": null,
+  "declip_version": "0.5.0",
+  "device": "metal",
+  "driver": [],
+  "encoder": "videotoolbox",
+  "errors": [],
+  "ffmpeg_version": "ffmpeg version 8.0.1 Copyright (c) 2000-2025 the FFmpeg developers",
+  "filler_false_hits": 0,
+  "filler_measurement": {
+    "labels": 18,
+    "hits": 18,
+    "tolerance_seconds": 0.3,
+    "first_30": {
+      "labels": 6,
+      "hits": 6,
+      "recall": 1.0
+    },
+    "after_30": {
+      "labels": 12,
+      "hits": 12,
+      "recall": 1.0
+    },
+    "false_hits": 0
+  },
+  "filler_recall": 1.0,
+  "git_commit": "1a834833b8539dbb6e199310c7524876e242309f",
+  "gpu": [
+    "Apple M4 Pro"
+  ],
+  "model": "mlx-community/whisper-large-v3-turbo",
+  "nvidia_smi_during_run": null,
+  "os": "darwin",
+  "passed": true,
+  "real_time_factor": 0.060045988585244396,
+  "render_10bit_probe": {
+    "codec": "hevc",
+    "pix_fmt": "yuv420p10le",
+    "profile": "Main 10",
+    "bit_depth": 10,
+    "encoder": "videotoolbox",
+    "duration": 3.007,
+    "duration_error_frames": 0.11988011988011998
+  },
+  "render_8bit_probe": {
+    "codec": "h264",
+    "pix_fmt": "yuv420p",
+    "profile": "High",
+    "bit_depth": 8,
+    "encoder": "videotoolbox",
+    "duration": 3.007,
+    "duration_error_frames": 0.11988011988011998
+  },
+  "requested_device": "metal",
+  "checked_at": "2026-10-06T17:26:56.726502+00:00",
+  "scope": "synthetic speech and generated render fixtures; no user-media decisions",
+  "metal_gpu_family": [
+    "spdisplays_metal4"
+  ],
+  "driver_note": "Apple GPU driver supplied by macOS; no separate driver version reported",
+  "transcription_seconds": 7.267857625003671,
+  "clip_duration": 121.0381875,
+  "validation_errors": []
+}

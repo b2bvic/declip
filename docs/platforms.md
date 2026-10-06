@@ -110,3 +110,17 @@ A final 24-bit WAV cannot recover precision lost inside that binary.
 Hardware certification requires separate platform receipts.
 Use the [README evidence matrix](../README.md#check-platform-support) for the current stated limits.
 GitHub Actions runs the test suite on `ubuntu-latest` and `macos-latest` for each push. These runners have no GPU.
+
+| Cell | State | Evidence or gap |
+|---|---|---|
+| macOS arm64: locked `mac` extra and MLX on Metal | Verified | [Metal receipt](receipts/macos-metal.json), passed. Cached `large-v3-turbo` weights, real backend, 18/18 filler labels, zero false hits, real-time factor 0.060. |
+| macOS arm64: VideoToolbox H.264 and HEVC Main 10 | Verified | Metal receipt: H.264 `yuv420p`; HEVC `yuv420p10le`, profile `Main 10`. |
+| macOS arm64: VideoToolbox A/V sync | Verified | Metal receipt: 250 keeps, 250 flashes, 250 beeps. Maximum offset 0.498 frames, including batch borders 40/41 and 80/81. Duration error 0.014 frames. |
+| CPU on macOS: locked `cpu` extra and faster int8 | Verified | [CPU receipt](receipts/macos-cpu.json), passed. Cached `large-v3-turbo` weights, 16/18 filler labels, one false hit, real-time factor 0.228. CUDA device count 0. |
+| CPU on macOS: software H.264 and HEVC Main 10 | Verified | CPU receipt: H.264 `yuv420p`; HEVC `yuv420p10le`, profile `Main 10`. Software encoding was forced. |
+| CPU on macOS: software A/V sync | Verified | CPU receipt: 250 keeps, 250 flashes, 250 beeps. Maximum offset 0.498 frames, including batch borders 40/41 and 80/81. Duration error below 0.001 frames. |
+| Linux with NVIDIA: CUDA loading, transcription, NVENC, and sync | Assumed; receipt waived for 0.5.0 | Verification hardware is unreachable. Ruling 11 (2026.10.06) waives the Linux receipt. No remote verification attempted. |
+| CPU on Linux | Assumed | The CPU receipt measures this Mac only; no Linux execution receipt exists. |
+| Windows | Deferred; planned and untested | Ruling 10 (2026.10.06) moves Windows to a later release. No Windows verification attempted. |
+| Prompt persistence after thirty seconds | Unproven | These smoke receipts measure prompted synthetic recall. They do not compare a no-prompt baseline or establish real-speech persistence. |
+| Hosted CI | Assumed | Runner jobs are configured. These local hardware receipts contain no hosted CI result. |
