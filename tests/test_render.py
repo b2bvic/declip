@@ -626,14 +626,16 @@ def test_failure_preserves_output_and_cleans_temp(
 
 
 @pytest.mark.ffmpeg
-def test_interrupt_stops_child_and_cleans_temp(ffmpeg, tmp_path, options, caps):
+@pytest.mark.parametrize("where", ["audio-1", "guard"])
+def test_interrupt_stops_child_and_cleans_temp(ffmpeg, tmp_path, options, caps, where):
     source, info = generate(ffmpeg, tmp_path / "clip.mp4")
     plan = plan_for(source, info, options, caps, tmp_path)
 
     def interrupt(name, fraction):
-        raise KeyboardInterrupt()
+        if name == where:
+            raise KeyboardInterrupt()
 
-    with pytest.raises(RenderError, match="audio-1.*interrupted"):
+    with pytest.raises(RenderError, match=where + ".*interrupted"):
         render.run_render_plan(plan, progress=interrupt)
     assert not plan.output.exists()
     assert not plan.temp_dir.exists()

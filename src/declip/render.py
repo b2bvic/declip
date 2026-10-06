@@ -636,6 +636,7 @@ def _stream_details(source: Path) -> list[dict]:
         capture_output=True,
         text=True,
         check=False,
+        timeout=60,
     )
     if result.returncode:
         raise RenderError(f"cannot read stream details: {result.stderr}")
@@ -813,9 +814,9 @@ def run_render_plan(
                 ):
                     raise RenderError("guard: source changed during rendering")
                 _check_output_path(plan.source, plan.output, step.argv[1] == "1")
-                os.replace(partial, plan.output)
                 if progress:
                     progress(step.name, 1.0)
+                os.replace(partial, plan.output)
         if result_info is None:
             raise RenderError("guard: render plan has no guard")
         return RenderResult(
